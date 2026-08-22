@@ -1,0 +1,95 @@
+# 红利价值分位研究 - 参数配置
+# 所有关键参数不写死；通过 mode (conservative/balanced/aggressive) 覆盖关键阈值。
+
+valuation:
+  pe_window_years: 10          # PE 主窗口
+  pe_aux_window_years: 5       # PE 辅窗口
+  negative_pe: exclude         # exclude / winsorize / keep
+  winsorize_pe: false
+  pe_upper_bound: null         # null=不删极端贵(>1000 保留并打标)
+
+payout:
+  lower: 0.0                   # 分红率<0 → abnormal
+  upper: 1.5                   # 分红率>150% → abnormal
+  winsorize: true
+  winsor_percent: 0.01         # 前后各1% winsorize，保留原始值与异常标记
+
+signals:
+  pe_percentile: 30            # 条件A: PE_Pct < 30%
+  dividend_percentile: 70      # 条件B: DY_Pct > 70%
+  payout_percentile: 70        # 条件C: PR_Pct < 70%
+  pe_percentile_conservative: 20
+  dividend_percentile_conservative: 80
+  hysteresis: 5.0   # 三条件滞回带宽(%分位)：回测时序中避免边界噪声导致信号来回翻转
+
+macro:
+  treasury_spread: 0.02        # 股息率-国债利差 阈值(2%)
+  risk_premium: [0.02, 0.03, 0.04]   # 利差情景/风险偏好
+
+gordon:
+  equity_risk_premium: 0.05    # ERP
+  min_g_ke_margin: 0.02        # g <= Ke - 2%
+  growth_sources: [hist, sustainable, industry, gdp]
+  ke_bear: 0.01               # 熊市 Ke 更高(+1%)→合理PE更低
+  ke_base: 0.0
+  ke_bull: -0.01              # 牛市 Ke 更低(-1%)→合理PE更高
+  g_bear: -0.01               # 熊市 g 更低
+  g_base: 0.0
+  g_bull: 0.01                # 牛市 g 更高
+
+fundamental:
+  w_earnings: 0.25
+  w_cashflow: 0.25
+  w_dividend: 0.20
+  w_leverage: 0.15
+  w_industry: 0.15
+  cagr_years: 5                # 增长率观察窗口
+  ocf_np_floor: 0.8            # 现金流质量下限
+  payout_unsustainable: 1.0    # 分红率>100% 判不可持续
+
+value_trap:
+  block_strong_buy_above: 60   # 陷阱分>60 禁 STRONG BUY
+  penalty_steps: [[0, 0.0], [40, 0.15], [60, 0.35], [80, 0.6], [100, 0.85]]  # 分数→惩罚系数
+
+score:
+  w_pe: 0.20
+  w_dy: 0.20
+  w_payout: 0.10
+  w_spread: 0.10
+  w_gordon: 0.15
+  w_quality: 0.20
+  w_industry: 0.05
+  neutral_default: 50.0   # 缺失维度(如Gordon失效)按中性分计，分母恒为全部权重，保证模式间可比
+
+position:
+  max_single_stock: 0.10
+  max_industry: 0.25
+  table:                      # [初始, 建议, 最大]
+    STRONG_BUY: [0.03, 0.05, 0.10]
+    BUY: [0.02, 0.04, 0.08]
+    ACCUMULATE: [0.01, 0.03, 0.06]
+    HOLD: [0.0, 0.0, 0.0]
+    WAIT: [0.0, 0.0, 0.0]
+    REDUCE: [-0.05, -0.05, 0.0]
+    SELL: [-0.1, -0.1, 0.0]
+
+backtest:
+  rebalance: weekly
+  max_position: 0.10
+  bench_weights: {}            # 动态权重，测试时配置
+  trading_cost: 0.001          # P0-10: 单边交易费率(千一)
+  slippage: 0.002              # P0-10: 滑点(千二)
+  allow_sell: true             # true=按模型买卖(默认)；false=只买不卖(权重只增不减，本模型用于判断买点)
+
+gdp_growth: 0.05               # 名义GDP增速约束(用5%)
+sustainable_roe_floor: 0.0     # sustainable g 计算时 ROE 下限
+
+modes:
+  conservative:
+    signals.pe_percentile: 20
+    signals.dividend_percentile: 80
+    gordon.ke_base: 0.01
+  aggressive:
+    signals.pe_percentile: 40
+    signals.dividend_percentile: 60
+    gordon.ke_base: -0.01
