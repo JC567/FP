@@ -3,7 +3,6 @@ __pycache__/
 *.pyo
 *.db
 *.sqlite
-/data/
 *.zip
 .env
 *.egg-info/
@@ -11,3 +10,12 @@ dist/
 build/
 .venv/
 venv/
+
+# data/ 下只排除缓存和生成物，保留配置文件
+data/analysis_cache.json
+data/pe_percentile_cache.csv
+data/spot_cache.csv
+data/error.log
+data/分红率排名.csv
+data/分红率排名（筛选后）.csv
+data/分红率排名（筛选后）.xlsx

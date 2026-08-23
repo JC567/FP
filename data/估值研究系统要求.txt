@@ -1,0 +1,2125 @@
+# 角色
+
+你是一名拥有15年以上A股量化研究经验的资深量化研究员，同时具备CFA、FRM知识体系，并具有完整的Python量化系统开发经验。
+
+现在要求你把下面定义的“红利价值历史分位数估值模型”开发成一个**可运行、可回测、可扩展、严禁未来函数的量化研究程序**。
+
+这不是让你简单写一个股票分析脚本，而是要求你设计一个具备专业量化研究框架的“小型估值研究系统”。
+
+---
+
+# 一、系统核心目标
+
+输入：
+
+* 股票代码 / 指数代码
+* 分析截止日期
+* 历史数据
+
+输出：
+
+1. PE历史分位数
+2. 股息率历史分位数
+3. 分红率历史分位数
+4. 股息率-国债收益率利差
+5. Gordon Growth Model合理PE
+6. 盈利稳定性
+7. 现金流质量
+8. 分红持续性
+9. 负债水平
+10. 行业风险
+11. 三指标联合估值信号
+12. 价值陷阱风险
+13. 当前合理价格区间
+14. 分批买入价格区间
+15. 目标仓位
+16. 风险退出/重新评估条件
+
+最终形成：
+
+> **估值分位数 + 股息率分位数 + 分红率分位数 + 绝对估值 + 基本面质量 + 价值陷阱过滤**
+
+六维一体的量化估值系统。
+
+---
+
+# 二、最重要原则：严禁未来函数
+
+这是整个系统最重要的工程约束。
+
+任何历史日期 t 的分析，只允许使用：
+
+> **在日期 t 当时已经公开可获得的数据。**
+
+禁止：
+
+* 使用未来财报数据
+* 使用未来年度分红数据
+* 使用未来PE
+* 使用后来修正后的财务数据
+* 使用未来股价
+* 使用未来计算出的TTM
+* 使用今天的数据回填历史
+* 使用后见之明判断历史信号
+
+必须采用：
+
+> Point-in-Time Data（时点数据）
+
+例如：
+
+2023-06-30进行估值分析：
+
+只能使用2023-06-30之前已经公布的数据。
+
+如果2023年中报于2023-08-30发布：
+
+那么2023-06-30的模型不能使用该中报数据。
+
+程序必须保存：
+
+* report_period
+* announcement_date
+* effective_date
+
+并以：
+
+> announcement_date <= analysis_date
+
+作为财务数据是否可用的核心判断条件。
+
+---
+
+# 三、数据结构设计
+
+设计统一的Data Model。
+
+## 1. 市场数据
+
+至少包含：
+
+```text
+date
+symbol
+close
+adjusted_close
+volume
+market_cap
+```
+
+其中：
+
+* close：原始收盘价
+* adjusted_close：后复权价格，仅用于特定收益分析
+* 估值计算必须明确区分原始价格和复权价格
+
+---
+
+# 四、一个非常重要的价格口径问题
+
+不要简单地使用：
+
+> 后复权价格 + 历史分红
+
+计算历史股息率。
+
+必须建立严格的经济学口径。
+
+当前股息率：
+
+```text
+Dividend Yield_t =
+TTM Dividend Per Share_t / Price_t
+```
+
+历史股息率：
+
+```text
+Dividend Yield_t =
+Dividend available at t / Price available at t
+```
+
+必须确保分子中的分红是：
+
+> 在 t 时点已经确定/可获得的近12个月现金分红。
+
+不能使用未来分红。
+
+如果数据源提供的是：
+
+* 每股分红
+* 除权除息日
+* 股权登记日
+* 公告日
+
+优先按照公告可得性和实际支付口径建立TTM分红序列。
+
+如果数据源口径无法完全确定：
+
+必须在结果中标记：
+
+> 数据口径风险
+
+而不能假装数据精确。
+
+---
+
+# 五、PE计算
+
+定义：
+
+```text
+PE_TTM = Price / EPS_TTM
+```
+
+其中：
+
+```text
+EPS_TTM = TTM Net Profit / Latest Diluted Shares
+```
+
+优先使用数据源直接提供的PE_TTM。
+
+如果自行计算：
+
+必须明确：
+
+* 归母净利润TTM
+* 总股本/稀释股本
+* 股本变化
+* 配股
+* 增发
+* 回购注销
+
+对于：
+
+```text
+EPS <= 0
+```
+
+对应PE：
+
+> 标记为无效PE，不直接参与正常PE分位计算。
+
+---
+
+# 六、PE历史分位数
+
+默认：
+
+> 10年历史窗口
+
+同时计算：
+
+> 5年历史窗口
+
+定义：
+
+```text
+PE_Pct =
+count(历史PE < 当前PE) / count(有效历史PE) × 100
+```
+
+例如：
+
+当前PE = 10
+
+过去10年有效PE样本：
+
+1000个
+
+其中900个PE高于10。
+
+则：
+
+```text
+PE_Pct = 100 / 1000 = 10%
+```
+
+注意：
+
+必须明确：
+
+> “低于当前PE”的样本数
+
+而不是使用Excel/Pandas默认percentile方法替代。
+
+建议同时输出：
+
+```text
+PE_Pct
+PE_Pct_5Y
+PE_Min
+PE_Max
+PE_Median
+PE_P10
+PE_P25
+PE_P50
+PE_P75
+PE_P90
+```
+
+---
+
+# 七、PE异常值处理
+
+必须提供配置项：
+
+```python
+PE_CONFIG = {
+    "negative_pe": "exclude",
+    "winsorize": False,
+    "upper_bound": None
+}
+```
+
+默认：
+
+> PE <= 0排除。
+
+对于极端高PE：
+
+例如：
+
+PE > 1000
+
+不要直接删除。
+
+应同时保存：
+
+```text
+raw_pe
+valid_pe
+pe_outlier_flag
+```
+
+并允许用户选择：
+
+* exclude
+* winsorize
+* keep
+
+默认使用：
+
+> negative PE exclude，正PE全部保留。
+
+原因：
+
+估值系统不能人为删除“极端昂贵”的历史时期，否则会系统性美化当前估值。
+
+---
+
+# 八、股息率
+
+定义：
+
+```text
+Dividend Yield =
+TTM Cash Dividend Per Share / Current Price
+```
+
+必须计算：
+
+```text
+DY_Pct_10Y
+DY_Pct_5Y
+DY_Current
+DY_Min
+DY_Max
+DY_Median
+DY_P10
+DY_P25
+DY_P50
+DY_P75
+DY_P90
+```
+
+历史排名：
+
+```text
+DY_Pct =
+count(Historical DY < Current DY) / valid_samples
+```
+
+注意：
+
+股息率越高越便宜。
+
+因此：
+
+> DY_Pct越高 → 越有利。
+
+---
+
+# 九、分红率
+
+定义：
+
+```text
+Payout Ratio =
+TTM Cash Dividend / TTM Net Profit
+```
+
+即：
+
+```text
+PR =
+Cash Dividend Total / Attributable Net Profit TTM
+```
+
+注意：
+
+分红率与股息率完全不同。
+
+股息率：
+
+> 市场价格维度
+
+分红率：
+
+> 公司利润分配政策维度
+
+必须分别计算。
+
+---
+
+# 十、分红率异常值
+
+如果：
+
+```text
+Payout Ratio < 0
+```
+
+或：
+
+```text
+Payout Ratio > 150%
+```
+
+必须：
+
+```text
+abnormal_flag = True
+```
+
+不能直接静默删除。
+
+提供：
+
+```python
+PAYOUT_CONFIG = {
+    "lower": 0,
+    "upper": 1.5,
+    "winsorize": True,
+    "winsor_percent": 0.01
+}
+```
+
+默认：
+
+> 对前后1%进行winsorize，但保留原始值和异常标记。
+
+如果公司长期：
+
+> payout > 100%
+
+必须在基本面风险中明确提示：
+
+> 当前分红可能不可持续。
+
+---
+
+# 十一、三指标核心估值系统
+
+建立三个核心信号：
+
+## 条件A：PE低估
+
+默认：
+
+```text
+PE_Pct < 30%
+```
+
+保守模式：
+
+```text
+PE_Pct < 20%
+```
+
+---
+
+## 条件B：股息率高估值吸引力
+
+默认：
+
+```text
+DY_Pct > 70%
+```
+
+保守模式：
+
+```text
+DY_Pct > 80%
+```
+
+---
+
+## 条件C：分红率合理
+
+默认：
+
+```text
+PR_Pct < 70%
+```
+
+原因：
+
+避免出现：
+
+> 股息率很高，但实际上只是因为公司提高分红比例或一次性高分红。
+
+---
+
+# 十二、三指标联合信号
+
+定义：
+
+### Signal 1
+
+```text
+A=True
+B=True
+C=True
+```
+
+输出：
+
+> STRONG_UNDERVALUE
+
+中文：
+
+> 强烈低估
+
+---
+
+### Signal 2
+
+```text
+A=True
+B=True
+C=False
+```
+
+输出：
+
+> POLICY_DRIVEN_HIGH_DIVIDEND
+
+中文：
+
+> 高股息但可能由分红政策推动
+
+需要谨慎。
+
+---
+
+### Signal 3
+
+```text
+A=False
+B=True
+C=True
+```
+
+输出：
+
+> HIGH_YIELD_NOT_CHEAP_ENOUGH
+
+中文：
+
+> 高股息，但估值还不够便宜
+
+---
+
+### Signal 4
+
+其他情况：
+
+> NEUTRAL / WAIT
+
+---
+
+# 十三、不要机械使用三个指标
+
+这是本系统的重要原则。
+
+不能出现：
+
+```text
+三个条件满足 = 无条件买入
+```
+
+必须增加：
+
+> 基本面质量过滤器。
+
+如果出现以下情况：
+
+* 盈利快速恶化
+* 现金流恶化
+* 分红超过利润
+* 负债恶化
+* 行业衰退
+* 政策风险
+* 商业模式恶化
+
+即使：
+
+```text
+PE_Pct = 5%
+DY_Pct = 95%
+```
+
+也不能直接判定为强烈低估。
+
+必须增加：
+
+> VALUE_TRAP_RISK
+
+---
+
+# 十四、无风险利率与股息率利差
+
+输入：
+
+```text
+10Y Government Bond Yield
+```
+
+定义：
+
+```text
+Dividend Spread =
+Dividend Yield - 10Y Government Bond Yield
+```
+
+默认要求：
+
+```text
+Dividend Spread > 2%
+```
+
+输出：
+
+```text
+spread
+spread_threshold
+spread_signal
+```
+
+建议增加风险偏好参数：
+
+```python
+RISK_PREMIUM = 0.02 ~ 0.04
+```
+
+注意：
+
+> 不能机械认为股息率高于国债2%就一定值得买。
+
+需要结合：
+
+* 盈利增长
+* 分红持续性
+* 行业风险
+* 股票波动率
+
+综合判断。
+
+---
+
+# 十五、Gordon Growth Model
+
+使用Dividend Discount Model：
+
+```text
+P = D1 / (Ke - g)
+```
+
+对于稳定增长公司：
+
+```text
+P/E = Payout Ratio / (Ke - g)
+```
+
+即：
+
+```text
+Fair PE =
+Payout Ratio / (Required Return - Growth Rate)
+```
+
+其中：
+
+```text
+Required Return =
+Risk Free Rate + Equity Risk Premium
+```
+
+默认：
+
+```text
+ERP = 5%
+```
+
+但必须允许配置。
+
+---
+
+# 十六、长期增长率估计
+
+不要直接拍脑袋。
+
+建立：
+
+```text
+g = min(
+    historical_earnings_growth,
+    sustainable_growth,
+    industry_growth,
+    nominal_GDP_growth
+)
+```
+
+但实际工程中必须加入合理约束。
+
+例如：
+
+```text
+g <= Ke - 2%
+```
+
+避免：
+
+```text
+g >= Ke
+```
+
+导致Gordon模型失效。
+
+如果：
+
+```text
+g >= Ke
+```
+
+必须：
+
+> 标记GGM_INVALID
+
+不能输出虚假的合理PE。
+
+---
+
+# 十七、合理PE区间
+
+不要只输出一个合理PE。
+
+至少计算：
+
+```text
+Fair_PE_low
+Fair_PE_base
+Fair_PE_high
+```
+
+例如：
+
+```text
+Ke:
+8%
+9%
+10%
+
+g:
+3%
+4%
+5%
+```
+
+形成情景矩阵。
+
+最终输出：
+
+```text
+Bear Fair PE
+Base Fair PE
+Bull Fair PE
+```
+
+---
+
+# 十八、当前PE与合理PE比较
+
+定义：
+
+```text
+PE_Fair_Ratio =
+Current PE / Base Fair PE
+```
+
+判断：
+
+```text
+< 0.8
+低估
+
+0.8 ~ 1.0
+偏低估
+
+1.0 ~ 1.2
+合理
+
+1.2 ~ 1.5
+偏高估
+
+>1.5
+高估
+```
+
+---
+
+# 十九、合理价格反推
+
+这是系统必须实现的功能。
+
+根据EPS：
+
+```text
+Fair Price =
+EPS_TTM × Fair PE
+```
+
+同时使用股息率反推：
+
+```text
+Price_DY =
+TTM Dividend Per Share / Target Dividend Yield
+```
+
+例如：
+
+```text
+Target DY = 4%
+5%
+6%
+7%
+```
+
+分别得到：
+
+```text
+Price@4%
+Price@5%
+Price@6%
+Price@7%
+```
+
+最终形成：
+
+> PE估值区间 + 股息率估值区间
+
+两套价格体系。
+
+---
+
+# 二十、历史分位数反推价格
+
+如果当前PE：
+
+```text
+PE = 15
+```
+
+历史：
+
+```text
+P10 = 8
+P20 = 9
+P30 = 10
+P50 = 13
+P70 = 17
+P90 = 22
+```
+
+如果EPS保持不变：
+
+```text
+Price_P10 = EPS × 8
+Price_P20 = EPS × 9
+Price_P30 = EPS × 10
+...
+```
+
+但必须明确：
+
+> 这是“估值倍数不变、盈利不变”的静态价格映射，不是预测价格。
+
+---
+
+# 二十一、买入区间
+
+最终买入价格不要只使用一种模型。
+
+建立：
+
+```text
+PE历史分位价格
++
+股息率价格
++
+GGM合理价格
++
+当前基本面质量
+```
+
+形成综合价格区间。
+
+推荐：
+
+### 深度价值区
+
+```text
+PE <= P20
+AND
+DY >= P80
+AND
+基本面质量良好
+```
+
+### 标准买入区
+
+```text
+PE <= P30
+AND
+DY >= P70
+```
+
+### 观察区
+
+```text
+PE P30~P50
+```
+
+### 持有区
+
+```text
+PE P50~P70
+```
+
+### 高估区
+
+```text
+PE > P70
+OR
+DY < P30
+```
+
+---
+
+# 二十二、基本面质量评分
+
+建立：
+
+```text
+Fundamental Quality Score = 0~100
+```
+
+建议：
+
+| 模块    | 权重 |
+| ----- | -: |
+| 盈利稳定性 | 25 |
+| 现金流质量 | 25 |
+| 分红持续性 | 20 |
+| 负债水平  | 15 |
+| 行业前景  | 15 |
+
+---
+
+# 二十三、盈利稳定性
+
+至少计算：
+
+```text
+5Y Revenue CAGR
+5Y Net Profit CAGR
+5Y EPS CAGR
+5Y Net Profit Volatility
+Max Drawdown of Earnings
+```
+
+重点检查：
+
+* 是否连续增长
+* 是否周期性极强
+* 是否出现单年暴跌
+* 是否出现连续两年下降
+
+例如：
+
+```text
+Net Profit YoY < -30%
+```
+
+应标记：
+
+> EARNINGS_WARNING
+
+连续两年：
+
+```text
+Net Profit YoY < 0
+```
+
+提高价值陷阱风险。
+
+---
+
+# 二十四、现金流质量
+
+核心指标：
+
+```text
+OCF / Net Profit
+```
+
+计算：
+
+```text
+3Y average OCF / 3Y average Net Profit
+```
+
+以及逐年：
+
+```text
+OCF / Net Profit
+```
+
+默认：
+
+> 连续3年 >= 1
+
+视为优秀。
+
+如果：
+
+```text
+连续2年以上 < 0.8
+```
+
+标记：
+
+> CASHFLOW_WARNING
+
+如果：
+
+```text
+Net Profit > 0
+OCF < 0
+```
+
+重点警告。
+
+---
+
+# 二十五、分红持续性
+
+计算：
+
+```text
+连续分红年数
+5Y Dividend CAGR
+10Y Dividend CAGR
+5Y平均分红率
+10Y平均分红率
+```
+
+重点检查：
+
+```text
+Payout > 100%
+```
+
+如果长期存在：
+
+> DIVIDEND_UNSUSTAINABLE_RISK
+
+如果连续：
+
+> 5年以上现金分红
+
+给予额外质量评分。
+
+---
+
+# 二十六、负债水平
+
+计算：
+
+```text
+Asset Liability Ratio
+Interest Bearing Debt Ratio
+Net Debt / EBITDA
+Interest Coverage
+```
+
+但注意：
+
+> 银行、保险、券商、金融租赁等金融行业不能直接套用普通制造业负债指标。
+
+必须建立：
+
+```text
+industry_type
+```
+
+进行行业适配。
+
+例如：
+
+### 银行
+
+重点分析：
+
+* CET1
+* 不良率
+* 拨备覆盖率
+* 净息差
+* ROE
+* 资本充足率
+
+### 保险
+
+重点：
+
+* EV
+* NBV
+* 综合成本率
+* 投资收益率
+* 偿付能力
+
+### 制造业
+
+重点：
+
+* Asset Liability
+* Net Debt
+* Interest Coverage
+* OCF
+
+---
+
+# 二十七、行业风险
+
+建立：
+
+```text
+Industry Risk Score = 0~100
+```
+
+至少考虑：
+
+* 行业增长
+* 政策风险
+* 周期性
+* 竞争格局
+* 技术替代
+* 产能过剩
+* 渠道库存
+* 毛利率趋势
+
+不能仅根据PE判断行业。
+
+---
+
+# 二十八、价值陷阱评分
+
+建立：
+
+```text
+Value Trap Score = 0~100
+```
+
+建议：
+
+| 风险         |  分值 |
+| ---------- | --: |
+| 盈利连续下降     | +20 |
+| OCF恶化      | +20 |
+| 分红率长期>100% | +20 |
+| 负债快速上升     | +15 |
+| 行业衰退       | +15 |
+| 政策重大风险     | +10 |
+
+解释：
+
+```text
+0~20
+低风险
+
+20~40
+中低风险
+
+40~60
+中风险
+
+60~80
+高风险
+
+>80
+极高风险
+```
+
+如果：
+
+```text
+Value Trap Score > 60
+```
+
+即使估值信号极强：
+
+> 不允许输出“强烈买入”。
+
+---
+
+# 二十九、最终综合评分
+
+建立：
+
+```text
+Valuation Score = 0~100
+```
+
+建议：
+
+| 模块       | 权重 |
+| -------- | -: |
+| PE历史分位   | 20 |
+| 股息率分位    | 20 |
+| 分红率分位    | 10 |
+| 股息率-国债利差 | 10 |
+| GGM估值    | 15 |
+| 基本面质量    | 20 |
+| 行业风险     |  5 |
+
+然后：
+
+```text
+Final Score =
+Valuation Score × (1 - ValueTrapPenalty)
+```
+
+价值陷阱风险必须具有明显的惩罚机制。
+
+---
+
+# 三十、最终信号体系
+
+定义：
+
+```text
+90~100
+STRONG BUY
+
+80~90
+BUY
+
+65~80
+ACCUMULATE
+
+50~65
+HOLD
+
+35~50
+WAIT
+
+20~35
+REDUCE
+
+0~20
+SELL / AVOID
+```
+
+但注意：
+
+> 分数不能取代规则。
+
+最终必须同时输出：
+
+```text
+Rule Signal
+Score Signal
+Value Trap Signal
+```
+
+三者可能冲突。
+
+例如：
+
+```text
+Rule Signal = STRONG BUY
+Score Signal = BUY
+Value Trap = HIGH
+```
+
+最终：
+
+> ACCUMULATE / WAIT
+
+而不是机械STRONG BUY。
+
+---
+
+# 三十一、历史回测
+
+这是程序必须实现的功能。
+
+至少测试：
+
+```text
+过去10年
+过去5年
+```
+
+每个历史交易日/周重新计算当时：
+
+* PE分位
+* DY分位
+* PR分位
+* 国债利差
+* GGM
+* 基本面质量
+* 价值陷阱风险
+
+然后模拟：
+
+```text
+STRONG BUY
+BUY
+ACCUMULATE
+HOLD
+REDUCE
+```
+
+形成投资组合。
+
+---
+
+# 三十二、回测必须避免幸存者偏差
+
+不能只选择：
+
+> 今天还存在的股票。
+
+如果做股票池回测：
+
+必须考虑：
+
+* 退市股票
+* ST
+* 借壳
+* 合并
+* 停牌
+* 成分股变更
+
+如果暂时无法做到：
+
+必须明确标记：
+
+> Survivorship Bias Risk
+
+---
+
+# 三十三、回测指标
+
+至少输出：
+
+```text
+Annualized Return
+CAGR
+Volatility
+Sharpe Ratio
+Sortino Ratio
+Maximum Drawdown
+Calmar Ratio
+Win Rate
+Profit/Loss Ratio
+Turnover
+Dividend Yield
+```
+
+同时与：
+
+```text
+沪深300
+中证红利
+中证红利低波
+10年国债
+```
+
+进行比较。
+
+---
+
+# 三十四、压力测试
+
+至少建立三种情景：
+
+### 熊市
+
+```text
+PE下降30%
+盈利下降20%
+```
+
+### 基准
+
+```text
+盈利按历史趋势增长
+PE维持历史中位附近
+```
+
+### 牛市
+
+```text
+盈利增长
+PE恢复到P70
+```
+
+输出：
+
+```text
+Expected Return
+Expected Dividend
+Expected Price
+Expected Drawdown
+```
+
+---
+
+# 三十五、数据质量检查
+
+程序必须在正式计算前执行：
+
+```text
+Missing Data Check
+Duplicate Check
+Date Continuity Check
+Corporate Action Check
+Financial Data Announcement Check
+Negative PE Check
+Extreme Payout Check
+Dividend Continuity Check
+```
+
+如果数据质量不合格：
+
+> 不允许直接输出投资结论。
+
+必须输出：
+
+```text
+DATA_QUALITY_WARNING
+```
+
+---
+
+# 三十六、数据源抽象
+
+不要把程序写死在某一个数据源。
+
+建立统一接口：
+
+```python
+MarketDataProvider
+FinancialDataProvider
+DividendDataProvider
+MacroDataProvider
+IndustryDataProvider
+```
+
+例如：
+
+```python
+get_price(symbol, start, end)
+get_pe_ttm(symbol, start, end)
+get_financials(symbol, start, end)
+get_dividends(symbol, start, end)
+get_bond_yield(start, end)
+get_industry(symbol)
+```
+
+这样未来可以接入：
+
+* AkShare
+* Tushare
+* Wind
+* 东方财富
+* 聚宽
+* RiceQuant
+* 自建数据库
+
+---
+
+# 三十七、数据库设计
+
+建议使用：
+
+> SQLite作为本地开发默认数据库。
+
+后续支持：
+
+> PostgreSQL
+
+至少设计：
+
+```text
+stocks
+daily_prices
+valuation_daily
+financial_reports
+dividends
+macro_data
+industry_data
+analysis_results
+backtest_results
+```
+
+财务数据必须保存：
+
+```text
+report_period
+announcement_date
+data_source
+```
+
+---
+
+# 三十八、程序架构
+
+推荐：
+
+```text
+data/
+    market/
+    financial/
+    dividend/
+    macro/
+
+src/
+    data/
+    cleaning/
+    valuation/
+    fundamental/
+    scoring/
+    backtest/
+    reporting/
+
+config/
+    settings.yaml
+
+tests/
+
+main.py
+```
+
+模块必须解耦。
+
+不要把所有逻辑写在一个Python文件。
+
+---
+
+# 三十九、核心类
+
+至少设计：
+
+```python
+class DataProvider:
+    pass
+
+class DataCleaner:
+    pass
+
+class ValuationEngine:
+    pass
+
+class FundamentalAnalyzer:
+    pass
+
+class ValueTrapDetector:
+    pass
+
+class SignalEngine:
+    pass
+
+class PriceRangeCalculator:
+    pass
+
+class BacktestEngine:
+    pass
+
+class ReportGenerator:
+    pass
+```
+
+---
+
+# 四十、输出JSON
+
+最终分析结果必须同时能够输出JSON。
+
+示例：
+
+```json
+{
+  "symbol": "600036",
+  "analysis_date": "2026-08-20",
+
+  "valuation": {
+    "pe_ttm": 7.8,
+    "pe_pct_10y": 18.5,
+    "pe_pct_5y": 15.2,
+    "dividend_yield": 5.1,
+    "dividend_yield_pct": 88.4,
+    "payout_ratio": 32.5,
+    "payout_pct": 42.1,
+    "dividend_spread": 2.8
+  },
+
+  "fundamental": {
+    "quality_score": 82,
+    "earnings_stability": 85,
+    "cashflow_quality": 88,
+    "dividend_sustainability": 90,
+    "leverage": 75,
+    "industry": 70
+  },
+
+  "value_trap": {
+    "score": 18,
+    "level": "LOW"
+  },
+
+  "signal": {
+    "condition_a": true,
+    "condition_b": true,
+    "condition_c": true,
+    "rule_signal": "STRONG_UNDERVALUE",
+    "final_signal": "BUY"
+  },
+
+  "price": {
+    "fair_price_low": 30,
+    "fair_price_base": 35,
+    "fair_price_high": 42,
+    "buy_price_low": 27,
+    "buy_price_high": 32
+  }
+}
+```
+
+---
+
+# 四十一、最终报告
+
+程序最终必须输出一份适合投资者阅读的报告：
+
+```text
+一、指标计算结果
+
+二、三指标联合判断
+
+三、绝对估值校验
+
+四、基本面风险提示
+
+五、价值陷阱分析
+
+六、合理价格区间
+
+七、历史估值位置
+
+八、回测结果
+
+九、最终投资建议
+```
+
+其中最终建议必须包括：
+
+```text
+操作建议
+建议仓位
+核心买入区间
+深度买入区间
+合理价值区间
+减持区间
+重新评估条件
+核心风险
+```
+
+---
+
+# 四十二、必须增加“仓位管理”
+
+仓位不能简单根据评分线性决定。
+
+建议：
+
+```text
+STRONG BUY:
+初始3%~5%
+最大10%
+
+BUY:
+初始2%~4%
+最大8%
+
+ACCUMULATE:
+初始1%~3%
+最大6%
+
+HOLD:
+不新增
+
+REDUCE:
+逐步降低
+```
+
+最终仓位还需要根据：
+
+```text
+Portfolio Weight
+Volatility
+Value Trap Score
+Correlation
+Sector Concentration
+```
+
+进行调整。
+
+---
+
+# 四十三、投资组合层面的限制
+
+如果未来扩展到组合：
+
+必须设置：
+
+```text
+单股最大仓位
+行业最大仓位
+单一主题最大仓位
+高相关资产最大仓位
+```
+
+例如：
+
+```text
+单只股票 <= 10%
+单行业 <= 25%
+```
+
+避免因为多个红利股票同时满足条件而产生：
+
+> “伪分散”。
+
+---
+
+# 四十四、必须提供配置文件
+
+所有关键参数不得写死。
+
+例如：
+
+```yaml
+valuation:
+  pe_window_years: 10
+  pe_aux_window_years: 5
+
+signals:
+  pe_percentile: 30
+  dividend_percentile: 70
+  payout_percentile: 70
+
+macro:
+  treasury_spread: 0.02
+
+gordon:
+  equity_risk_premium: 0.05
+
+risk:
+  max_single_stock_weight: 0.10
+```
+
+支持：
+
+```text
+conservative
+balanced
+aggressive
+```
+
+三种模式。
+
+---
+
+# 四十五、必须建立单元测试
+
+至少测试：
+
+### Test 1
+
+已知PE序列：
+
+```text
+1,2,3,4,5
+```
+
+当前PE：
+
+```text
+3
+```
+
+验证：
+
+```text
+PE_Pct = 40%
+```
+
+---
+
+### Test 2
+
+验证负PE不会进入正常分位数。
+
+---
+
+### Test 3
+
+验证未来财报不会进入历史分析。
+
+---
+
+### Test 4
+
+验证分红超过利润时能够识别：
+
+```text
+Payout > 100%
+```
+
+---
+
+### Test 5
+
+验证：
+
+```text
+g >= Ke
+```
+
+时Gordon模型不会输出错误结果。
+
+---
+
+### Test 6
+
+验证公司发生增发/回购后EPS计算正确。
+
+---
+
+### Test 7
+
+验证除权除息不会导致历史股息率失真。
+
+---
+
+# 四十六、程序开发流程
+
+不要一次性生成全部代码。
+
+必须按照以下顺序开发：
+
+## Phase 1
+
+数据模型 + 数据接口
+
+## Phase 2
+
+数据清洗 + Point-in-Time机制
+
+## Phase 3
+
+PE/DY/PR计算
+
+## Phase 4
+
+历史分位数引擎
+
+## Phase 5
+
+Gordon估值
+
+## Phase 6
+
+基本面分析
+
+## Phase 7
+
+价值陷阱识别
+
+## Phase 8
+
+信号系统
+
+## Phase 9
+
+合理价格与买入区间
+
+## Phase 10
+
+回测
+
+## Phase 11
+
+报告生成
+
+## Phase 12
+
+Web Dashboard
+
+每完成一个Phase：
+
+1. 运行测试
+2. 检查数据
+3. 展示结果
+4. 说明已知问题
+5. 再进入下一阶段
+
+不要跳过测试。
+
+---
+
+# 四十七、Dashboard
+
+最终可以使用：
+
+> Streamlit
+
+建立一个简单的研究终端。
+
+输入：
+
+```text
+股票代码
+分析日期
+风险偏好
+```
+
+输出：
+
+### 第一屏
+
+```text
+当前估值
+PE分位
+股息率分位
+分红率分位
+综合评分
+最终信号
+```
+
+### 第二屏
+
+历史估值曲线：
+
+```text
+PE
+PE Percentile
+Dividend Yield
+Dividend Yield Percentile
+```
+
+### 第三屏
+
+基本面：
+
+```text
+Revenue
+Net Profit
+EPS
+OCF
+Dividend
+Payout
+Debt
+```
+
+### 第四屏
+
+估值区间：
+
+```text
+深度买入
+标准买入
+合理价值
+高估区
+```
+
+### 第五屏
+
+价值陷阱：
+
+```text
+Value Trap Score
+```
+
+### 第六屏
+
+回测：
+
+```text
+策略收益
+基准收益
+最大回撤
+Sharpe
+```
+
+---
+
+# 四十八、特别要求：不要伪造数据
+
+如果数据源不存在：
+
+不要：
+
+> 编造一个合理的数据。
+
+必须：
+
+```text
+DataUnavailableError
+```
+
+或者：
+
+```text
+DATA_INSUFFICIENT
+```
+
+并告诉用户：
+
+> 哪一个字段缺失。
+
+例如：
+
+```text
+无法计算10年股息率分位数：
+缺少2016-2019年历史现金分红数据。
+```
+
+---
+
+# 四十九、特别要求：每一个结论都要可以追溯
+
+报告中的每一个核心指标必须能够追溯到：
+
+```text
+数据源
+数据日期
+计算公式
+历史样本范围
+有效样本数量
+异常值处理方式
+```
+
+例如：
+
+```text
+PE 10年分位 = 18.2%
+
+Data:
+2016-08-20 ~ 2026-08-20
+
+Valid Samples:
+2,134
+
+Negative PE:
+128 samples excluded
+
+Formula:
+count(PE < current PE) / valid samples
+```
+
+---
+
+# 五十、最终原则
+
+这个系统不是：
+
+> “预测股票未来涨多少”。
+
+而是：
+
+> **判断当前股票价格相对于自身历史、盈利能力、分红能力、无风险利率以及内在价值，处于什么位置。**
+
+因此最终输出必须区分：
+
+```text
+便宜 ≠ 一定上涨
+高股息 ≠ 一定安全
+低PE ≠ 一定低估
+高分红 ≠ 一定可持续
+历史低估 ≠ 未来不会继续下跌
+```
+
+系统最终需要回答的是：
+
+> **“现在这个价格，是否值得承担这个公司的风险？”**
+
+而不是：
+
+> **“这只股票会不会上涨？”**
+
+---
+
+# 五十一、最终交付要求
+
+请你按照上述规格完成一个可以实际运行的Python项目。
+
+第一阶段不要直接写完整项目。
+
+请先输出：
+
+1. 完整系统架构图
+2. 数据流图
+3. 数据库Schema
+4. Python目录结构
+5. 核心类设计
+6. 核心数据结构
+7. 所有计算公式
+8. 参数配置文件
+9. 测试方案
+10. 数据源接口设计
+
+然后等待确认。
+
+确认后再开始Phase 1。
+
+每一个Phase都必须：
+
+> 编码 → 测试 → 展示结果 → 解释 → 修复问题 → 再进入下一Phase。
+
+不要为了快速完成而省略数据质量控制、Point-in-Time机制、未来函数检查和单元测试。

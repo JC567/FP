@@ -1,0 +1,202 @@
+{
+  "symbol": "600036",
+  "name": "招商银行",
+  "analysis_date": "2025-07-01",
+  "mode": "balanced",
+  "valuation": {
+    "date": "2025-07-01",
+    "price": 46.45,
+    "eps_ttm": 5.7,
+    "dps_ttm": 1.972,
+    "pe_ttm": 8.18,
+    "pe_pct_10y": 50.02,
+    "pe_pct_5y": 62.08,
+    "pe_min": 4.7,
+    "pe_max": 14.13,
+    "pe_median": 8.13,
+    "pe_p10": 5.79,
+    "pe_p25": 6.99,
+    "pe_p50": 8.13,
+    "pe_p75": 10.2,
+    "pe_p90": 11.7,
+    "pe_p20": 6.62,
+    "pe_p30": 7.28,
+    "pe_p70": 9.94,
+    "pe_n_valid": 2429,
+    "pe_n_excluded": 0,
+    "dividend_yield": 4.25,
+    "dividend_yield_pct": 70.19,
+    "dy_pct_5y": 45.91,
+    "dy_min": 2.05,
+    "dy_max": 10.95,
+    "dy_median": 3.42,
+    "dy_p10": 2.42,
+    "dy_p90": 5.36,
+    "dy_n_valid": 2402,
+    "payout_ratio": 34.6,
+    "payout_pct": 88.84,
+    "pr_pct_5y": 79.93,
+    "pr_n_valid": 2402,
+    "pr_n_excluded": 0,
+    "payout_abnormal": false,
+    "rf_10y": 1.643,
+    "dividend_spread": 2.602,
+    "spread_threshold": 2.0,
+    "spread_signal": true
+  },
+  "fundamental": {
+    "quality_score": 64.2,
+    "sub": {
+      "earnings": 69,
+      "cashflow": 50,
+      "dividend": 90,
+      "leverage": 55,
+      "industry": 55
+    },
+    "detail": {
+      "earnings": {
+        "cagr_revenue": 0.08096888688402348,
+        "cagr_np": 0.09285769753988493,
+        "cagr_eps": 0.07856316687517273,
+        "np_vol": 0.068,
+        "np_max_drawdown": 0.0,
+        "consecutive_declines": 0
+      },
+      "cashflow": {
+        "ocf_np_3y": null,
+        "ocf_np_years": {}
+      },
+      "dividend": {
+        "consecutive_years": 22,
+        "dps_cagr_5y": 0.1426,
+        "dps_cagr_10y": 0.1426,
+        "avg_payout_5y": 0.335,
+        "avg_payout_10y": 0.314,
+        "unsustainable": false
+      },
+      "leverage": {
+        "asset_liability_ratio": null
+      }
+    },
+    "flags": [],
+    "warnings": [
+      "现金流质量: 缺少经营现金流总量(OCF)(DATA_INSUFFICIENT)",
+      "负债水平: 金融行业(银行)需专门指标(资本充足/偿付能力/杠杆)，当前数据不足，采用中间分(DATA_INSUFFICIENT)"
+    ]
+  },
+  "value_trap": {
+    "score": 0,
+    "level": "LOW",
+    "flags": [],
+    "detail": {},
+    "penalty": 0.0,
+    "block_strong_buy": false
+  },
+  "signal": {
+    "condition_a": false,
+    "condition_b": true,
+    "condition_c": false,
+    "rule_signal": "NEUTRAL",
+    "score": 59.1,
+    "score_signal": "HOLD",
+    "value_trap_level": "LOW",
+    "final_signal": "HOLD",
+    "note": "",
+    "mode": "balanced",
+    "thresholds": {
+      "pe": 30,
+      "dy": 70,
+      "payout": 70
+    },
+    "gordon_g": 0.05,
+    "g_growth_sources": {
+      "hist": 0.085,
+      "sustainable": 0.085,
+      "industry": 0.05,
+      "gdp": 0.05
+    },
+    "pe_fair_ratio": null,
+    "pe_fair_band": "NA",
+    "gordon_scenario": {
+      "fair_pe_low": 9.5,
+      "fair_pe_base": null,
+      "fair_pe_high": null,
+      "fair_price_low": 54.15,
+      "fair_price_base": null,
+      "fair_price_high": null,
+      "ke_bear": 0.0764,
+      "ke_base": 0.0664,
+      "ke_bull": 0.0564,
+      "g": 0.05,
+      "g_bear": 0.04,
+      "g_bull": 0.06,
+      "erp": 0.05,
+      "rf": 0.0164,
+      "invalid": "GGM_INVALID: Ke-g 过小"
+    }
+  },
+  "price": {
+    "deep_buy_low": 33.96,
+    "deep_buy_high": 37.73,
+    "standard_buy_low": 37.35,
+    "standard_buy_high": 41.5,
+    "price_at_4pct": 49.3,
+    "price_at_5pct": 39.44,
+    "price_at_6pct": 32.87,
+    "price_at_7pct": 28.17,
+    "pe_p20_price": 37.73,
+    "pe_p30_price": 41.5,
+    "pe_p50_price": 46.34,
+    "pe_p70_price": 56.66,
+    "pe_p10_price": 33.0,
+    "pe_p90_price": 66.69,
+    "current_zone": "持有区"
+  },
+  "position": {
+    "signal": "HOLD",
+    "init_weight": 0.0,
+    "target_weight": 0.0,
+    "max_weight": 0.0,
+    "value_trap_score": 0,
+    "rationale": "信号=HOLD 的基础仓位"
+  },
+  "trace": {
+    "pe": {
+      "source": "baidu_pit_approx",
+      "n_valid": 2429,
+      "n_excluded": 0,
+      "window": "2015-07-02 ~ 2025-07-01",
+      "formula": "count(PE<cur)/n_valid×100"
+    },
+    "dy": {
+      "source": "cninfo分红+sina日线",
+      "n_valid": 2402,
+      "formula": "DPS_TTM(近12月已实施)/price×100, count(DY<cur)/n"
+    },
+    "payout": {
+      "source": "cninfo分红+ths财报",
+      "n_valid": 2402,
+      "n_excluded": 0,
+      "formula": "DPS_TTM/EPS_TTM×100(每股口径), 越界winsorize"
+    },
+    "gordon": {
+      "source": "ths财报+国债",
+      "formula": "FairPE=Payout/(Ke-g), Ke=Rf+ERP"
+    },
+    "rf": {
+      "source": "bond_zh_us_rate(中国10Y)"
+    }
+  },
+  "quality_warnings": [
+    "存在 5 处 >10日 断档(DATA_QUALITY_WARNING)"
+  ],
+  "data_limitations": [
+    "行业识别来源=keyword-inference",
+    "行业为关键词推断(启发式)，可配置覆盖",
+    "PE_TTM_PIT_APPROXIMATION: 百度历史PE为as-reported，有轻微前视",
+    "财报公告日按法规截止日近似(DATA_CALIBER_RISK)"
+  ],
+  "notes": [
+    "便宜≠一定上涨；高股息≠一定安全；历史低估≠未来不会继续下跌。"
+  ]
+}
