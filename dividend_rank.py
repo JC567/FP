@@ -375,6 +375,36 @@ def add_val_percentiles(codes):
     return dy_out, pp_out
 
 
+def _compute_eps_payout_ratios(codes):
+    """批量计算 EPS 口径分红率：每股年度分红合计 / 每股收益(基本EPS) × 100。"""
+    import stock_db as _db
+    conn = _db.connect()
+    result = {}
+    for code in codes:
+        code = str(code).zfill(6)
+        try:
+            div_rows = pd.read_sql_query(
+                'SELECT SUBSTR(report_date,1,4) AS year, SUM(per_share) AS ps '
+                'FROM div_hist WHERE code=? GROUP BY year',
+                conn, params=(code,))
+            eps_rows = pd.read_sql_query(
+                'SELECT year, eps FROM fin_np WHERE code=?',
+                conn, params=(code,))
+            if div_rows.empty or eps_rows.empty:
+                continue
+            m = div_rows.merge(eps_rows, on='year', how='inner')
+            m = m[m['eps'] > 0]
+            if m.empty:
+                continue
+            last = m.sort_values('year').iloc[-1]
+            payout = float(last['ps']) / float(last['eps']) * 100.0
+            result[code] = round(payout, 2)
+        except Exception:
+            continue
+    conn.close()
+    return result
+
+
 def main():
     per = build_dividend()
     continuous = continuous_dividend_codes()
@@ -416,14 +446,21 @@ def main():
     ok_pp = int(pd.Series(pp_pct).notna().sum())
     print(f'近10年股息率/分红率百分位计算完成: 股息率 {ok_dy}/{len(res)} 只, 分红率 {ok_pp}/{len(res)} 只')
 
+    # 计算 EPS 口径分红率（= 每股年度分红合计 / 每股收益 × 100）
+    print('正在计算 EPS 口径分红率...')
+    eps_payout = _compute_eps_payout_ratios(res['代码'].tolist())
+    res['EPS分红率'] = res['代码'].astype(str).str.zfill(6).map(lambda c: eps_payout.get(c, pd.NA))
+
     print(f'\n最新分红率 > {THRESHOLD}% 的股票共 {len(res)} 只\n')
-    cols = ['排名', '代码', '名称', '最新分红率', '昨日分红率', '当前PE', '当前PB',
+    cols = ['排名', '代码', '名称', '最新分红率', '昨日分红率', 'EPS分红率', '当前PE', '当前PB',
             '是否满足近5年增长', '近10年PE百分位', '近10年股息率百分位', '近10年分红率百分位',
-            '每股分红合计', '最新价', '昨收']
+            '每股分红合计', '最新价']
     print(res[cols].head(12).to_string(index=False, float_format=lambda x: f'{x:.4f}'))
 
-    res.to_csv(os.path.join(OUT, '分红率排名.csv'), index=False, encoding='utf-8-sig')
-    print(f'\n结果已保存 -> data/分红率排名.csv（共 {len(res)} 只）')
+    # 输出时去掉"昨收"列（内部计算仍需要）
+    out_res = res.drop(columns=['昨收'], errors='ignore')
+    out_res.to_csv(os.path.join(OUT, '分红率排名.csv'), index=False, encoding='utf-8-sig')
+    print(f'\n结果已保存 -> data/分红率排名.csv（共 {len(out_res)} 只）')
 
 
 if __name__ == '__main__':

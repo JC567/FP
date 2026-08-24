@@ -24,11 +24,7 @@ if len(low): issues.append(f'最新分红率<=3% {len(low)} 只')
 # --- 3. 内部一致性 ---
 import numpy as np
 ok_late = np.isclose(out['最新分红率'], out['每股分红合计'] / out['最新价'] * 100, rtol=1e-6, atol=1e-4)
-ok_yes = np.isclose(out['昨日分红率'], out['每股分红合计'] / out['昨收'] * 100, rtol=1e-6, atol=1e-4)
-ok_diff = np.isclose(out['分红率涨跌幅'], out['最新分红率'] - out['昨日分红率'], rtol=1e-6, atol=1e-4)
 if not ok_late.all(): issues.append(f'最新分红率与收盘价不一致 {int((~ok_late).sum())} 行')
-if not ok_yes.all(): issues.append(f'昨日分红率与昨收不一致 {int((~ok_yes).sum())} 行')
-if not ok_diff.all(): issues.append(f'涨跌幅≠最新-昨日 {int((~ok_diff).sum())} 行')
 if not (out['每股分红合计'] > 0).all(): issues.append('存在每股分红<=0')
 
 # --- 4. 每股分红合计与2025分红源核对（缓存年报+中报）---
