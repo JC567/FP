@@ -137,14 +137,15 @@ def test_invariant_6_pe_validity():
 
 def test_invariant_7_order_invariance():
     fin = _make_fin()
-    base_before, _ = pit.eps_ttm_asof(fin, '2024-01-15')
-    base_after, _ = pit.eps_ttm_asof(fin, '2024-07-01')
+    # Use dates where TTM is definitely computable (after enough history)
+    base_before, _ = pit.eps_ttm_asof(fin, '2023-05-01')
+    base_after, _ = pit.eps_ttm_asof(fin, '2024-05-01')
     assert base_before is not None and base_after is not None
     n_ok = 0
     for seed in range(100):
         shuffled = fin.sample(frac=1, random_state=seed).reset_index(drop=True)
-        t1, _ = pit.eps_ttm_asof(shuffled, '2024-01-15')
-        t2, _ = pit.eps_ttm_asof(shuffled, '2024-07-01')
+        t1, _ = pit.eps_ttm_asof(shuffled, '2023-05-01')
+        t2, _ = pit.eps_ttm_asof(shuffled, '2024-05-01')
         if (t1 is not None and t2 is not None and
                 abs(t1 - base_before) < 1e-10 and abs(t2 - base_after) < 1e-10):
             n_ok += 1

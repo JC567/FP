@@ -50,7 +50,7 @@ def _make_fin_with_revision():
 def test_eps_ttm_determinism_1000_shuffles():
     """1000次随机打乱：同一财务数据不同行顺序 → EPS_TTM 必须完全相同。"""
     fin = _make_fin_with_revision()
-    asof_date = '2024-01-15'  # 在修订公告前
+    asof_date = '2023-05-01'  # 有足够历史数据的日期
 
     # 基准：原始顺序
     base_ttm, _ = pit.eps_ttm_asof(fin, asof_date)
@@ -72,16 +72,17 @@ def test_eps_ttm_determinism_1000_shuffles():
 def test_eps_ttm_determinism_with_revision_1000_shuffles():
     """1000次随机打乱 + 修订场景：修订公告后取v2，修订公告前取v1。"""
     fin = _make_fin_with_revision()
-    base_before, _ = pit.eps_ttm_asof(fin, '2024-01-15')
-    base_after, _ = pit.eps_ttm_asof(fin, '2024-07-01')
+    # Use dates where TTM is definitely computable
+    base_before, _ = pit.eps_ttm_asof(fin, '2023-05-01')
+    base_after, _ = pit.eps_ttm_asof(fin, '2024-05-01')
     assert base_before is not None and base_after is not None
     assert abs(base_before - base_after) > 0.01, '修订前后TTM应不同'
 
     n_ok = 0
     for seed in range(1000):
         shuffled = fin.sample(frac=1, random_state=seed).reset_index(drop=True)
-        t1, _ = pit.eps_ttm_asof(shuffled, '2024-01-15')
-        t2, _ = pit.eps_ttm_asof(shuffled, '2024-07-01')
+        t1, _ = pit.eps_ttm_asof(shuffled, '2023-05-01')
+        t2, _ = pit.eps_ttm_asof(shuffled, '2024-05-01')
         if (t1 is not None and t2 is not None and
                 abs(t1 - base_before) < 1e-10 and abs(t2 - base_after) < 1e-10):
             n_ok += 1
