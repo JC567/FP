@@ -263,12 +263,6 @@ class TaskApp:
         ttk.Checkbutton(pbar, text='股息率', variable=self.val_show_dy).pack(side='left', padx=(2, 0))
         ttk.Checkbutton(pbar, text='分红率', variable=self.val_show_pr).pack(side='left', padx=(2, 0))
         ttk.Separator(pbar, orient='vertical').pack(side='left', fill='y', padx=(8, 8))
-        ttk.Label(pbar, text='分红率口径：', style='Muted.TLabel').pack(side='left')
-        self.payout_mode = tk.StringVar(value='price')
-        ttk.Radiobutton(pbar, text='价格口径(÷股价)', variable=self.payout_mode,
-                        value='price', command=self._on_payout_mode_change).pack(side='left', padx=(2, 0))
-        ttk.Radiobutton(pbar, text='利润口径(÷EPS)', variable=self.payout_mode,
-                        value='earnings', command=self._on_payout_mode_change).pack(side='left', padx=(2, 0))
         ttk.Label(pbar, text='截止交易日：', style='Muted.TLabel').pack(side='left', padx=(12, 0))
         self.dv_date_entry = ttk.Entry(pbar, width=12)
         self.dv_date_entry.pack(side='left', padx=(4, 0))
@@ -316,18 +310,55 @@ class TaskApp:
         # 加载稳健型分析缓存
         cache = self._load_analysis_cache()
         df['稳健型单股分析'] = df['代码'].map(lambda c: cache.get(c, ''))
-        # 保存分红率原始值（价格口径），供口径切换时恢复
-        if '最新分红率' in df.columns:
-            df['最新分红率_raw'] = df['最新分红率']
+
+        # 计算「正常化TTM股息率」(最新分红率_raw)：近12个月（TTM）普通现金股息总和 ÷ 当前股价
+        try:
+            import stock_db as _db
+            conn = _db.connect()
+            ttm = pd.read_sql_query(
+                "SELECT code, SUM(per_share) AS ttm_ps FROM div_hist "
+                "WHERE ann_date >= date('now','-365 days') GROUP BY code", conn)
+            conn.close()
+            ttm_map = dict(zip(ttm['code'], ttm['ttm_ps'])) if not ttm.empty else {}
+        except Exception:
+            ttm_map = {}
+        df = self._prepare_data_view(df, ttm_map)
+
         self.dv_df = df
         self.dv_pe_low = pe_low
         self.dv_special = special
         self.dv_sort = ['', True]          # [列, 升序?]
         self.dv_filters = {}               # {列名: 筛选表达式}
-        # 重置分红率口径为价格口径
-        if hasattr(self, 'payout_mode'):
-            self.payout_mode.set('price')
         self._render_data_view()
+
+    @staticmethod
+    def _prepare_data_view(df, ttm_map):
+        """数据查看页字段处理：
+        - 最新分红率_raw = 近12月(TTM)现金股息总和 ÷ 当前股价 × 100（正常化TTM股息率）
+        - 去掉 EPS分红率、昨日分红率
+        - 最新分红率 → 最新价格去年分红率
+        - 最新分红率_raw 紧随 最新价格去年分红率 之后
+        """
+        df = df.copy()
+        if '最新价' in df.columns:
+            df['最新分红率_raw'] = (
+                df['代码'].astype(str).str.zfill(6).map(lambda c: ttm_map.get(c, pd.NA))
+                / df['最新价'].replace(0, pd.NA) * 100.0
+            ).round(2)
+        # 1) 去掉 EPS分红率、昨日分红率
+        drop_cols = [c for c in ('EPS分红率', '昨日分红率') if c in df.columns]
+        if drop_cols:
+            df = df.drop(columns=drop_cols)
+        # 2) 最新分红率 → 最新价格去年分红率
+        if '最新分红率' in df.columns:
+            df = df.rename(columns={'最新分红率': '最新价格去年分红率'})
+        # 3) 最新分红率_raw 紧随 最新价格去年分红率 之后
+        cols = list(df.columns)
+        if '最新价格去年分红率' in cols and '最新分红率_raw' in cols:
+            cols.remove('最新分红率_raw')
+            cols.insert(cols.index('最新价格去年分红率') + 1, '最新分红率_raw')
+            df = df[cols]
+        return df
 
     def _header_name_at(self, e):
         region = self.dv.identify_region(e.x, e.y)
@@ -610,83 +641,6 @@ class TaskApp:
         for c in cols:
             mark = ' ▾' if c in self.dv_filters else ''
             self.dv.heading(c, text=c + mark)
-
-    # ---------- 分红率口径切换 ----------
-    def _on_payout_mode_change(self):
-        """切换分红率口径时重新计算"最新分红率"列。"""
-        mode = self.payout_mode.get()
-        if mode == 'price':
-            # 价格口径：恢复 CSV 原始值
-            if self.dv_df is not None and '最新分红率_raw' in self.dv_df.columns:
-                self.dv_df['最新分红率'] = self.dv_df['最新分红率_raw']
-            self._render_data_view()
-        else:
-            # 利润口径：用 EPS 计算
-            self._compute_eps_payout_ratios()
-
-    def _compute_eps_payout_ratios(self):
-        """后台计算所有股票的 EPS 口径分红率（÷每股收益）。"""
-        if self.dv_df is None or self.dv_df.empty:
-            return
-        codes = self.dv_df['代码'].astype(str).str.zfill(6).tolist()
-        self._post('log', f'正在计算 {len(codes)} 只股票的利润口径分红率…\n', 'run')
-        self.btn_val_chart.config(state='disabled')
-
-        def _worker():
-            try:
-                import stock_db as _db
-                conn = _db.connect()
-                result = {}
-                total = len(codes)
-                for i, code in enumerate(codes, 1):
-                    try:
-                        # 查询该股票各年度的分红合计
-                        div_rows = pd.read_sql_query(
-                            'SELECT CAST(SUBSTR(report_date,1,4) AS INTEGER) AS year, SUM(per_share) AS ps '
-                            'FROM div_hist WHERE code=? GROUP BY year',
-                            conn, params=(code,))
-                        # 查询该股票各年度的 EPS
-                        eps_rows = pd.read_sql_query(
-                            'SELECT year, eps FROM fin_np WHERE code=?',
-                            conn, params=(code,))
-                        if div_rows.empty or eps_rows.empty:
-                            continue
-                        m = div_rows.merge(eps_rows, on='year', how='inner')
-                        m = m[m['eps'] > 0]
-                        if m.empty:
-                            continue
-                        last = m.sort_values('year').iloc[-1]
-                        payout = float(last['ps']) / float(last['eps']) * 100.0
-                        result[code] = round(payout, 2)
-                    except Exception:
-                        continue
-                    if i % 50 == 0 or i == total:
-                        self._post('log', f'[利润口径进度] {i}/{total}\n', 'run')
-                conn.close()
-                self._payout_eps_cache = result
-                self.root.after(0, self._apply_eps_payout)
-            except Exception as e:
-                self._post('log', f'利润口径计算失败: {e}\n', 'err')
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _apply_eps_payout(self):
-        """将 EPS 口径分红率应用到表格。"""
-        cache = getattr(self, '_payout_eps_cache', {})
-        if not cache:
-            self._post('log', '利润口径计算完成，无可用数据\n', 'run')
-            return
-        df = self.dv_df
-        if df is None:
-            return
-        # 保存原始值（首次）
-        if '最新分红率_raw' not in df.columns:
-            df['最新分红率_raw'] = df['最新分红率']
-        codes = df['代码'].astype(str).str.zfill(6)
-        df['最新分红率'] = codes.map(lambda c: cache.get(c, pd.NA))
-        filled = df['最新分红率'].notna().sum()
-        self._post('log', f'利润口径分红率计算完成: {filled}/{len(df)} 只有数据\n', 'ok')
-        self._render_data_view()
 
     def _dv_filter_mask(self, df, col, expr):
         s = df[col]
