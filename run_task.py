@@ -224,6 +224,12 @@ class TaskApp:
         self.btn_jump = ttk.Button(bar, text='配置选中股票 →', style='Small.TButton',
                                    command=self._jump_selected_to_config, state='disabled')
         self.btn_jump.pack(side='left', padx=(10, 0))
+        self.btn_dv_select_all = ttk.Button(bar, text='全选', style='Small.TButton',
+                                            command=lambda: self.dv.selection_set(self.dv.get_children()))
+        self.btn_dv_select_all.pack(side='left', padx=(10, 0))
+        self.btn_dv_deselect = ttk.Button(bar, text='取消选择', style='Small.TButton',
+                                          command=lambda: self.dv.selection_remove(self.dv.get_children()))
+        self.btn_dv_deselect.pack(side='left', padx=(6, 0))
         self.btn_batch_analysis = ttk.Button(bar, text='稳健型批量分析', style='Accent.TButton',
                                              command=self._batch_conservative_analysis)
         self.btn_batch_analysis.pack(side='left', padx=(10, 0))
@@ -708,6 +714,24 @@ class TaskApp:
         values = self.dv.item(sel[0], 'values')
         return norm_code(values[cols.index('代码')]) or None
 
+    def _selected_dv_codes(self):
+        """返回当前在列表中人工选中的股票代码列表（已规范化）。"""
+        sel = self.dv.selection()
+        if not sel:
+            return []
+        cols = list(self.dv['columns'])
+        if '代码' not in cols:
+            return []
+        idx = cols.index('代码')
+        out = []
+        for iid in sel:
+            values = self.dv.item(iid, 'values')
+            if idx < len(values):
+                c = norm_code(values[idx])
+                if c and c not in out:
+                    out.append(c)
+        return out
+
     def _jump_selected_to_config(self):
         code = self._selected_dv_code()
         if not code:
@@ -827,14 +851,21 @@ class TaskApp:
         if df is None or df.empty:
             messagebox.showinfo('提示', '请先运行1号任务生成数据。')
             return
-        codes = df['代码'].tolist()
+        # 人工选中则只分析选中股票；未选中则分析全部
+        sel_codes = self._selected_dv_codes()
+        if sel_codes:
+            codes = sel_codes
+            scope = f'选中 {len(codes)} 只'
+        else:
+            codes = df['代码'].tolist()
+            scope = f'全部 {len(codes)} 只'
         cache = self._load_analysis_cache()
         pending = [c for c in codes if c not in cache]
         if not pending:
-            messagebox.showinfo('提示', f'全部 {len(codes)} 只股票已有分析缓存。')
+            messagebox.showinfo('提示', f'{scope} 中的股票均已分析完成（共 {len(codes)} 只）。')
             return
         if not messagebox.askyesno('确认',
-                f'共 {len(codes)} 只股票，其中 {len(pending)} 只待分析。\n'
+                f'将对「{scope}」进行稳健型批量分析，其中 {len(pending)} 只待分析。\n'
                 f'稳健型模式分析每只约需10~30秒，全部完成可能需要较长时间。\n\n'
                 '是否开始批量分析？'):
             return
