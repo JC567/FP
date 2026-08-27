@@ -384,7 +384,7 @@ def _compute_eps_payout_ratios(codes):
         code = str(code).zfill(6)
         try:
             div_rows = pd.read_sql_query(
-                'SELECT SUBSTR(report_date,1,4) AS year, SUM(per_share) AS ps '
+                'SELECT CAST(SUBSTR(report_date,1,4) AS INTEGER) AS year, SUM(per_share) AS ps '
                 'FROM div_hist WHERE code=? GROUP BY year',
                 conn, params=(code,))
             eps_rows = pd.read_sql_query(

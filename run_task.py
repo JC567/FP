@@ -16,6 +16,7 @@ import json
 import queue
 import subprocess
 import threading
+import time
 import traceback
 
 import tkinter as tk
@@ -226,6 +227,9 @@ class TaskApp:
         self.btn_batch_analysis = ttk.Button(bar, text='稳健型批量分析', style='Accent.TButton',
                                              command=self._batch_conservative_analysis)
         self.btn_batch_analysis.pack(side='left', padx=(10, 0))
+        self.btn_batch_pause = ttk.Button(bar, text='暂停', style='Small.TButton',
+                                          command=self._toggle_batch_pause, state='disabled')
+        self.btn_batch_pause.pack(side='left', padx=(6, 0))
         self.btn_clear_analysis = ttk.Button(bar, text='清理分析缓存', style='Small.TButton',
                                              command=self._clear_analysis_cache)
         self.btn_clear_analysis.pack(side='left', padx=(6, 0))
@@ -638,7 +642,7 @@ class TaskApp:
                     try:
                         # 查询该股票各年度的分红合计
                         div_rows = pd.read_sql_query(
-                            'SELECT SUBSTR(report_date,1,4) AS year, SUM(per_share) AS ps '
+                            'SELECT CAST(SUBSTR(report_date,1,4) AS INTEGER) AS year, SUM(per_share) AS ps '
                             'FROM div_hist WHERE code=? GROUP BY year',
                             conn, params=(code,))
                         # 查询该股票各年度的 EPS
@@ -881,10 +885,24 @@ class TaskApp:
                 '是否开始批量分析？'):
             return
         self.running = True
+        self.batch_paused = False
         self.btn_batch_analysis.config(state='disabled')
+        self.btn_batch_pause.config(state='normal', text='暂停')
         self.btn_run.config(state='disabled')
         threading.Thread(target=self._batch_analysis_worker,
                          args=(codes, cache), daemon=True).start()
+
+    def _toggle_batch_pause(self):
+        """暂停/继续 稳健型批量分析。"""
+        if not self.running:
+            return
+        self.batch_paused = not getattr(self, 'batch_paused', False)
+        if self.batch_paused:
+            self.btn_batch_pause.config(text='继续')
+            self._post('log', '⏸ 稳健型批量分析已暂停（点击「继续」恢复）\n', 'run')
+        else:
+            self.btn_batch_pause.config(text='暂停')
+            self._post('log', '▶ 稳健型批量分析已继续\n', 'run')
 
     def _batch_analysis_worker(self, codes, cache):
         from valresearch.main import analyze as vr_analyze
@@ -896,6 +914,11 @@ class TaskApp:
         for i, code in enumerate(codes):
             if code in cache:
                 continue
+            # 暂停轮询：被暂停时阻塞等待，每 0.5s 检查一次
+            while getattr(self, 'batch_paused', False) and self.running:
+                time.sleep(0.5)
+            if not self.running:
+                break
             try:
                 self._post('status', f'分析 {i+1}/{total} {code}…', ACCENT)
                 rep = vr_analyze(code, today, 'conservative')
@@ -922,7 +945,9 @@ class TaskApp:
         self._post('status', f'分析完成 ✓{ok} ✕{fail}', GREEN)
         self._post('log', f'\n稳健型批量分析完成：成功 {ok}，失败 {fail}\n')
         self.running = False
+        self.batch_paused = False
         self.btn_batch_analysis.config(state='normal')
+        self.btn_batch_pause.config(state='disabled', text='暂停')
         self.btn_run.config(state='normal')
         # 刷新数据查看
         try:
@@ -1247,45 +1272,14 @@ class TaskApp:
             self._post('status', f'完成 · 全量 {full_n} / 筛选后 {filt_n}', GREEN)
             self._post('log', '✅ 1号任务执行完成！\n')
             self._post('log', f'  全量: {full_n} 只\n  筛选后: {filt_n} 只\n')
-            # 自动启动稳健型批量分析
-            self._post('log', '\n正在自动启动稳健型批量分析（可在「数据查看」页签查看进度）…\n', 'run')
-            self.root.after(500, self._auto_batch_analysis)
+            # 稳健型批量分析不再自动启动，请到「数据查看」页签手动开启
+            self._post('log', '\n分红率排名已完成。如需稳健型单股分析，请切换到「数据查看」页签点击「稳健型批量分析」按钮手动开启。\n', 'run')
         else:
             self._post('status', '失败，请查看日志', RED)
             self._post('log', '❌ 执行失败，请检查上方日志。\n', 'err')
         self._post('bar', 0 if not ok else 100)
         self.btn_run.config(state='normal')
         self.running = False
-
-    def _auto_batch_analysis(self):
-        """1号任务完成后自动触发稳健型批量分析。"""
-        if self.running:
-            return
-        df = self.dv_df
-        if df is None or df.empty:
-            try:
-                self._load_data_view('筛选后')
-                df = self.dv_df
-            except Exception:
-                pass
-        if df is None or df.empty:
-            return
-        codes = df['代码'].tolist()
-        cache = self._load_analysis_cache()
-        pending = [c for c in codes if c not in cache]
-        if not pending:
-            self._post('log', '稳健型分析缓存已完整，无需重新分析。\n')
-            try:
-                self._load_data_view(self.dv_choice.get())
-            except Exception:
-                pass
-            return
-        self._post('log', f'待分析股票: {len(pending)}/{len(codes)} 只\n', 'run')
-        self.running = True
-        self.btn_batch_analysis.config(state='disabled')
-        self.btn_run.config(state='disabled')
-        threading.Thread(target=self._batch_analysis_worker,
-                         args=(codes, cache), daemon=True).start()
 
     @staticmethod
     def _count(path):
