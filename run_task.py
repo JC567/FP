@@ -563,6 +563,14 @@ class TaskApp:
 
         if pe_w is None and dy_w is None and pr_w is None:
             return
+        # 各序列延展到“最新日期(今天)”：年度分红率等低频序列止步于较早的公告日，
+        # 会导致图表最新时间不是今天。无新数据时按最后值前移(Carry-forward)，
+        # 使 PE/股息率/分红率 三条线都画到今天，图表标题也显示今天。
+        today = pd.Timestamp.today().normalize()
+        target_end = end if end is not None else today
+        pe_w = self._extend_series_to(pe_w, target_end)
+        dy_w = self._extend_series_to(dy_w, target_end)
+        pr_w = self._extend_series_to(pr_w, target_end)
         self._show_val_plot(code, name, pe_w, cur_pe, pe30, pe70,
                             dy_w, cur_dy, dy30, dy70, pr_w, cur_pr, pr30, pr70)
 
@@ -573,6 +581,19 @@ class TaskApp:
         except Exception as e:
             self._log_dy(code, f'分红率序列失败: {type(e).__name__} {str(e)[:120]}')
             return None
+
+    @staticmethod
+    def _extend_series_to(w, target_end):
+        """将序列按最后值前移(Carry-forward)到 target_end，使图表画到最新日期。
+        target_end 之前的已有数据不动；已在 target_end 及之后则原样返回。"""
+        if w is None or w.empty:
+            return w
+        last_date = w['日期'].iloc[-1]
+        if last_date >= target_end:
+            return w
+        last_val = w['value'].iloc[-1]
+        extra = pd.DataFrame([{'日期': target_end, 'value': last_val}])
+        return pd.concat([w, extra]).sort_values('日期').reset_index(drop=True)
 
     def _show_val_plot(self, code, name, pe_w, cur_pe, pe30, pe70,
                        dy_w, cur_dy, dy30, dy70, pr_w, cur_pr, pr30, pr70):
