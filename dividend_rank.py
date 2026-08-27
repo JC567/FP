@@ -29,6 +29,7 @@ except Exception:
 import akshare as ak
 import pandas as pd
 import stock_db as db
+import industry_map as indmap
 import div_hist
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
@@ -425,6 +426,14 @@ def main():
     res = res.sort_values('最新分红率', ascending=False).reset_index(drop=True)
     res.insert(0, '排名', res.index + 1)
 
+    # 行业分类（东方财富行业板块，缓存于 vr_stocks；网络失败则留空，不影响排名主流程）
+    try:
+        ind_map = indmap.ensure_industry_map()
+        res.insert(res.columns.get_loc('名称') + 1, '行业',
+                   res['代码'].astype(str).str.zfill(6).map(lambda c: ind_map.get(c, '')))
+    except Exception:
+        pass
+
     print('正在计算近10年PE百分位（首次较慢，之后走缓存）...')
     pct, cur_pe, cur_pb = add_pe_percentile(res['代码'].tolist())
     print('正在计算近5年增长（营收/净利润）...')
@@ -455,6 +464,8 @@ def main():
     cols = ['排名', '代码', '名称', '最新分红率', '昨日分红率', 'EPS分红率', '当前PE', '当前PB',
             '是否满足近5年增长', '近10年PE百分位', '近10年股息率百分位', '近10年分红率百分位',
             '每股分红合计', '最新价']
+    if '行业' in res.columns:   # 网络获取失败时可能缺列，避免 KeyError
+        cols.insert(cols.index('名称') + 1, '行业')
     print(res[cols].head(12).to_string(index=False, float_format=lambda x: f'{x:.4f}'))
 
     # 输出时去掉"昨收"列（内部计算仍需要）

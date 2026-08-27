@@ -340,12 +340,29 @@ class TaskApp:
     @staticmethod
     def _prepare_data_view(df, ttm_map):
         """数据查看页字段处理：
+        - 行业：优先用 CSV 自带列；缺失时从 vr_stocks 缓存补（不触网），置于 名称 之后
         - 最新分红率_raw = 近12月(TTM)现金股息总和 ÷ 当前股价 × 100（正常化TTM股息率）
         - 去掉 EPS分红率、昨日分红率
         - 最新分红率 → 最新价格去年分红率
         - 最新分红率_raw 紧随 最新价格去年分红率 之后
         """
         df = df.copy()
+        # 0) 行业列：缺失则从本地缓存(vr_stocks.industry)补，并置于 名称 之后
+        if '行业' not in df.columns and '代码' in df.columns:
+            try:
+                import stock_db as _db
+                conn = _db.connect()
+                ind_map = _db.get_industry_map(conn)
+                conn.close()
+                if ind_map:
+                    df['行业'] = df['代码'].astype(str).str.zfill(6).map(lambda c: ind_map.get(c, ''))
+            except Exception:
+                pass
+        if '行业' in df.columns and '名称' in df.columns:
+            cols0 = list(df.columns)
+            cols0.remove('行业')
+            cols0.insert(cols0.index('名称') + 1, '行业')
+            df = df[cols0]
         if '最新价' in df.columns:
             df['最新分红率_raw'] = (
                 df['代码'].astype(str).str.zfill(6).map(lambda c: ttm_map.get(c, pd.NA))

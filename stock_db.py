@@ -177,6 +177,25 @@ def replace_pe(conn, code, df):
     save_pe(conn, code, df)
 
 
+# ---------- 行业分类（vr_stocks，缓存） ----------
+
+def save_vr_stocks(conn, rows):
+    """rows: [(symbol, name, industry, industry_type, list_date, delist_date)]"""
+    conn.executemany(
+        'INSERT OR REPLACE INTO vr_stocks VALUES (?,?,?,?,?,?)',
+        [(str(r[0]), str(r[1]) if r[1] is not None else '',
+          str(r[2]) if r[2] is not None else '', str(r[3]) if r[3] is not None else '',
+          str(r[4]) if r[4] is not None else '', str(r[5]) if r[5] is not None else '')
+         for r in rows])
+    conn.commit()
+
+
+def get_industry_map(conn):
+    """返回 {代码: 行业名称} 缓存（来自 vr_stocks.industry）。"""
+    df = pd.read_sql_query('SELECT symbol, industry FROM vr_stocks', conn)
+    return dict(zip(df['symbol'].astype(str), df['industry'].astype(str))) if not df.empty else {}
+
+
 # ---------- PB 历史 ----------
 
 def get_pb(conn, code):
