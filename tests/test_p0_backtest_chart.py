@@ -154,6 +154,10 @@ def test_simulate_capital_modes():
     assert abs(cap['strategy']['invested'] - 1_000_000) < 1000, cap['strategy']['invested']
     # 智能定投：便宜/贵各半年，总投入在合理区间
     assert 300000 < cap['smart']['invested'] <= 1_100_000, cap['smart']['invested']
+    # 交易明细：每月定投应含"预算注入"与"买入"记录
+    assert 'trades' in cap['monthly'] and isinstance(cap['monthly']['trades'], list)
+    assert cap['monthly']['trades'][0]['action'] == '预算注入'
+    assert any(t['action'] == '买入' for t in cap['strategy']['trades'])
     print('test_simulate_capital_modes OK monthly=%.0f strategy=%.0f smart=%.0f'
           % (cap['monthly']['invested'], cap['strategy']['invested'], cap['smart']['invested']))
 

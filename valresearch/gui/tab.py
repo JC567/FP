@@ -299,6 +299,16 @@ HELP_REPORT = (
 )
 
 
+def _money(x):
+    """千分位 + 2 位小数；None 返回 '--'。"""
+    if x is None:
+        return '--'
+    try:
+        return '{:,.2f}'.format(float(x))
+    except (TypeError, ValueError):
+        return str(x)
+
+
 class VRTab:
     def __init__(self, nb: ttk.Notebook):
         self.nb = nb
@@ -382,11 +392,21 @@ class VRTab:
         self.out.grid(row=0, column=0, sticky='nsew')
         self.out.tag_config('err', foreground='#f87171')
 
-        # 回测图区（走势图 + 收益率走势图）
-        self.chart_host = tk.Frame(self.tab, bg=BG)
-        self.chart_host.grid(row=5, column=0, sticky='nsew', pady=(6, 0))
+        # 回测图区（走势图 + 收益率走势图）+ 右侧按钮栏
+        self.chart_wrap = tk.Frame(self.tab, bg=BG)
+        self.chart_wrap.grid(row=5, column=0, sticky='nsew', pady=(6, 0))
+        self.chart_wrap.rowconfigure(0, weight=1)
+        self.chart_wrap.columnconfigure(0, weight=1)
+        self.chart_wrap.columnconfigure(1, weight=0)
+        self.chart_host = tk.Frame(self.chart_wrap, bg=BG)
+        self.chart_host.grid(row=0, column=0, sticky='nsew')
         self.chart_host.rowconfigure(0, weight=1); self.chart_host.columnconfigure(0, weight=1)
         self._chart_canvas = None
+        self.chart_side = tk.Frame(self.chart_wrap, bg=BG)
+        self.chart_side.grid(row=0, column=1, sticky='ns', padx=(6, 0))
+        self.btn_trades = ttk.Button(self.chart_side, text='交易明细', style='Small.TButton',
+                                      state='disabled', command=self._open_trades)
+        self.btn_trades.pack(side='top', fill='x', pady=(0, 4))
         self.tab.rowconfigure(5, weight=3)
 
     # ---------- 帮助弹框 ----------
@@ -489,6 +509,8 @@ class VRTab:
             messagebox.showwarning('提示', str(e))
             return
         self._set_busy(True, '准备回测…')
+        self.btn_trades.config(state='disabled')
+        self._bt_trades = None
         allow_sell = not self.var_nosell.get()
         dividend_reinvest = self.var_dr.get()
         threading.Thread(target=self._work_bt, args=(code, mode, allow_sell, dividend_reinvest),
@@ -502,6 +524,7 @@ class VRTab:
                                allow_sell=allow_sell, dividend_reinvest=dividend_reinvest)
             self.q.put(('report', self._bt_summary(res)))
             if res.get('ok'):
+                self.q.put(('btmeta', (res.get('trades'), res.get('modes'))))
                 try:
                     from valresearch.backtest import make_backtest_figure
                     fig = make_backtest_figure(res)
@@ -571,6 +594,9 @@ class VRTab:
                     self._set_busy(False, '完成')
                 elif kind == 'chart':
                     self._show_chart(item[1])
+                elif kind == 'btmeta':
+                    self._bt_trades, self._bt_modes = item[1]
+                    self.btn_trades.config(state='normal' if self._bt_trades else 'disabled')
                 elif kind == 'err':
                     self._append(item[1] + '\n', 'err')
                     self._set_busy(False, '失败')
@@ -600,6 +626,62 @@ class VRTab:
             self._chart_canvas = canvas
         except Exception as e:
             self._append(f'图表显示失败: {e}\n', 'err')
+
+    def _open_trades(self):
+        """弹出窗口：按模式分页展示本次回测的交易记录明细。"""
+        trades = getattr(self, '_bt_trades', None)
+        if not trades:
+            messagebox.showinfo('提示', '暂无交易记录（本次回测未产生建仓）。')
+            return
+        modes = getattr(self, '_bt_modes', None) or {}
+        win = tk.Toplevel(self.root)
+        win.title('回测交易明细')
+        win.geometry('880x660')
+        win.configure(bg=BG)
+        nb = ttk.Notebook(win)
+        nb.pack(fill='both', expand=True, padx=8, pady=8)
+        labels = (('每月定投', 'monthly'), ('策略买点', 'strategy'),
+                  ('智能定投', 'smart'), ('巴菲特模式', 'buffett'))
+        for cn_label, key in labels:
+            tl = trades.get(key)
+            if not tl:
+                continue
+            f = ttk.Frame(nb)
+            nb.add(f, text=cn_label)
+            box = scrolledtext.ScrolledText(f, state='disabled', wrap='none',
+                                            font=('Consolas', 9), bg='#111827',
+                                            fg='#e5e7eb', insertbackground='white')
+            box.pack(fill='both', expand=True)
+            txt = self._fmt_trades(key, tl, modes.get(key))
+            box.config(state='normal')
+            box.insert('1.0', txt)
+            box.config(state='disabled')
+
+    @staticmethod
+    def _fmt_trades(key, trades, mode_metric):
+        L = []
+        A = L.append
+        if mode_metric:
+            A('【%s】期末资产=%s ｜ 累计投入=%s ｜ 总收益率=%s ｜ 最大回撤=%s'
+              % (cn(key), mode_metric.get('期末资产'), mode_metric.get('累计投入'),
+                 mode_metric.get('总收益率'), mode_metric.get('最大回撤')))
+        A('-' * 78)
+        A('日期          动作     价格        金额            股数          余现金')
+        A('-' * 78)
+        n_buy = 0
+        for t in trades:
+            if t['action'] == '预算注入':
+                A('%-13s 预算注入              +%14s                %14s'
+                  % (t['date'], _money(t['amount']), _money(t['cash'])))
+            else:
+                n_buy += 1
+                A('%-13s 买入   %12s  %14s  %14s  %14s'
+                  % (t['date'], _money(t['price']), _money(t['amount']),
+                     _money(t['shares']), _money(t['cash'])))
+        A('-' * 78)
+        A('共 %d 条记录（预算注入 %d 次，买入 %d 次）'
+          % (len(trades), len(trades) - n_buy, n_buy))
+        return '\n'.join(L)
 
     def _set_busy(self, busy, text):
         self.busy = busy

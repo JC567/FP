@@ -87,7 +87,9 @@ def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_d
                            annual_budget=500000.0, rf_yield=None, reb_buffett=None):
     """资本预算回测：每年注入 annual_budget，比较四种建仓模式（价格用 px_price，含分红再投则用后复权）。
 
-    返回 {mode: {'value': Series(每日资产=持股*价+现金), 'invested': 累计投入}}。
+    返回 {mode: {'value': Series(每日资产=持股*价+现金), 'invested': 累计投入,
+               'trades': [交易明细...]}}。
+    交易明细每条: {'date','action'(预算注入/买入),'price','amount'(现金变动),'shares'(买入股数),'cash'(变动后现金)}。
       · monthly   每月定投：每月首个交易日投入 annual_budget/12（现金不足则投入剩余）。
       · strategy  策略买点：出现买入类信号(买入/强烈买入/逢低吸纳)时，把当时全部可用现金一次买完；
                           当年无买点则现金自然留存到下一年（预算每年照常注入）。
@@ -109,7 +111,7 @@ def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_d
     n = len(dates)
     monthly = annual_budget / 12.0
     is_buy = reb_df['signal'].isin(_BUY_SET).fillna(False).to_numpy()
-    is_buffett = reb_df['buffett'].fillna(False).to_numpy().astype(bool) if 'buffett' in reb_df else None
+    is_buffett = np.asarray(reb_df['buffett'].tolist(), dtype=bool) if 'buffett' in reb_df else None
     pe = reb_df['pe'].to_numpy()
     dy = reb_df['dy'].to_numpy()
     rf = np.asarray(rf_yield, dtype=float) if rf_yield is not None else None
@@ -121,12 +123,16 @@ def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_d
         cur_year = None
         last_month = None
         vals = np.empty(n)
+        trades = []
         for i in range(n):
             d = dates[i]
             yr = d.year
             if cur_year != yr:
                 cash += annual_budget
                 cur_year = yr
+                trades.append({'date': str(d.date()), 'action': '预算注入',
+                               'price': None, 'amount': round(annual_budget, 2),
+                               'shares': 0.0, 'cash': round(cash, 2)})
             # 闲置现金按 10Y 国债每日复利计息（自动买国债）
             if rf is not None:
                 r = rf[i]
@@ -137,15 +143,23 @@ def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_d
                 if last_month != d.month:
                     amt = min(monthly, cash)
                     if p and p > 0 and amt > 0:
-                        shares += amt / p
+                        sh = amt / p
+                        shares += sh
                         cash -= amt
                         invested += amt
+                        trades.append({'date': str(d.date()), 'action': '买入',
+                                       'price': round(float(p), 3), 'amount': round(amt, 2),
+                                       'shares': round(sh, 2), 'cash': round(cash, 2)})
                     last_month = d.month
             elif kind == 'strategy':
                 if is_buy[i] and cash > 0 and p and p > 0:
-                    shares += cash / p
+                    sh = cash / p
+                    shares += sh
                     invested += cash
                     cash = 0.0
+                    trades.append({'date': str(d.date()), 'action': '买入',
+                                   'price': round(float(p), 3), 'amount': round(sh * p, 2),
+                                   'shares': round(sh, 2), 'cash': round(cash, 2)})
             elif kind == 'smart':
                 if last_month != d.month:
                     pev = 50.0 if pd.isna(pe[i]) else pe[i]
@@ -154,26 +168,34 @@ def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_d
                     mult = max(0.5, min(2.0, 1.0 + 1.0 * cheap))
                     amt = min(monthly * mult, cash)
                     if p and p > 0 and amt > 0:
-                        shares += amt / p
+                        sh = amt / p
+                        shares += sh
                         cash -= amt
                         invested += amt
+                        trades.append({'date': str(d.date()), 'action': '买入',
+                                       'price': round(float(p), 3), 'amount': round(amt, 2),
+                                       'shares': round(sh, 2), 'cash': round(cash, 2)})
                     last_month = d.month
             elif kind == 'buffett':
                 if last_month != d.month and is_buffett is not None and is_buffett[i] \
                         and cash > 0 and p and p > 0:
                     amt = min(monthly, cash)   # 低估区分批：每月额度，连续低估则逐月买
-                    shares += amt / p
+                    sh = amt / p
+                    shares += sh
                     cash -= amt
                     invested += amt
+                    trades.append({'date': str(d.date()), 'action': '买入',
+                                   'price': round(float(p), 3), 'amount': round(amt, 2),
+                                   'shares': round(sh, 2), 'cash': round(cash, 2)})
                     last_month = d.month
             vals[i] = (shares * p if p == p else shares * 0.0) + cash
-        return vals, invested
+        return vals, invested, trades
 
     out = {}
     for k in ('monthly', 'strategy', 'smart', 'buffett'):
-        v, inv = _sim(k)
+        v, inv, tr = _sim(k)
         s = pd.Series(v, index=dates)
-        out[k] = {'value': s, 'invested': float(inv)}
+        out[k] = {'value': s, 'invested': float(inv), 'trades': tr}
     return out
 
 
@@ -457,9 +479,11 @@ def run_backtest(symbol: str, start: str, end: str = None, mode: str = 'balanced
         rf_series = None
 
     _prog(0.92, '模拟资本预算模式(每年50万)…')
-    # 资本预算回测：每年注入 annual_budget，比较 每月定投/策略买点/智能定投 三种模式
+    # 资本预算回测：每年注入 annual_budget，比较 每月定投/策略买点/智能定投/巴菲特 四种模式。
+    # 注意：价格序列本身向前多取了 ~400 天作收益起点，但建仓窗口必须限定在 [start, end]，
+    # 否则会"提前"从 start 之前就开始注入预算/买入，导致回测收益被高估。
     price_daily = px[ret_col]
-    dates_cap = price_daily.index
+    dates_cap = price_daily.index[(price_daily.index >= lo) & (price_daily.index <= hi)]
     reb_dates = [t.strftime('%Y-%m-%d') for t in df.index]
     reb_signal = df['final_signal'].astype(str).tolist()
     reb_pe = df['pe_pct'].astype(float).tolist() if 'pe_pct' in df.columns else [np.nan] * len(df)
@@ -509,6 +533,7 @@ def run_backtest(symbol: str, start: str, end: str = None, mode: str = 'balanced
         'avg_quality': round(float(df['quality'].mean()), 1) if 'quality' in df else None,
         'avg_score': round(float(df['score'].mean()), 1) if 'score' in df else None,
         'modes': modes_metrics,
+        'trades': {k: cap[k]['trades'] for k in cap},
         'notes': [
             ('只买不卖模式(allow_sell=false)：模型仅用于判断买点，权重只增不减，卖出信号仅阻止新增买入。'
              if not bt_cfg.get('allow_sell', True) else
