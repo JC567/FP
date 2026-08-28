@@ -30,7 +30,8 @@ MUTED = '#6b7280'
 # 中文模式名 -> 内部 key
 MODE_CN2KEY = {'稳健型 (保守)': 'conservative',
                '均衡型 (默认)': 'balanced',
-               '进取型 (激进)': 'aggressive'}
+               '进取型 (激进)': 'aggressive',
+               '巴菲特模式': 'buffett'}
 
 HELP_GLOSSARY = (
     '【新手必读 · 术语速查】看不懂报告？先看这一页\n'
@@ -122,7 +123,14 @@ HELP_MODE = (
     '   · 适合：风险承受力强、想抓住更多机会的投资者。\n'
     '   · 代价：买贵一点的可能性更大，需要扛得住回撤。\n'
     '\n'
-    '一句话总结：稳健=耐心等好价，进取=积极抓机会，均衡=两头兼顾。\n'
+    '■ 巴菲特模式（buffett）——"优质+便宜+安全边际"买点判定\n'
+    '   · 不是调门槛，而是换一套判定标准：质量分≥60(护城河扎实) 且\n'
+    '     价≤Gordon合理价×0.8(留有安全边际) 且 价值陷阱分≤50(非陷阱)，三者同时成立才"适合"。\n'
+    '   · 适合时给"分批建仓、长期持有(forever)"建议；不适合时只说明原因、不给出买入建议。\n'
+    '   · 与前面三种模式的区别：前三种按"历史估值分位"宽松度买卖；巴菲特模式按\n'
+    '     "内在价值(质量+Gordon)+安全边际"判定，更贴近价值投资，且不看分位、只看重质量与便宜度。\n'
+    '\n'
+    '一句话总结：稳健=耐心等好价，进取=积极抓机会，均衡=两头兼顾，巴菲特=优质+便宜(留安全边际)才出手。\n'
     '\n'
     '选择方式：页面上方「模式」下拉框切换，或点「模式说明」查看本说明。'
 )
@@ -381,8 +389,13 @@ class VRTab:
         wrap = tk.Frame(self.tab, bg=BG)
         wrap.grid(row=4, column=0, sticky='nsew')
         wrap.rowconfigure(1, weight=1); wrap.columnconfigure(0, weight=1)
-        tk.Label(wrap, text='输出', bg=BG, fg=TEXT, font=('Microsoft YaHei', 11, 'bold')).grid(
+        tl = tk.Frame(wrap, bg=BG)
+        tl.grid(row=0, column=0, sticky='ew')
+        tl.columnconfigure(0, weight=1)
+        tk.Label(tl, text='输出', bg=BG, fg=TEXT, font=('Microsoft YaHei', 11, 'bold')).grid(
             row=0, column=0, sticky='w', pady=(0, 6))
+        ttk.Button(tl, text='清空输出', style='Small.TButton',
+                   command=self._clear_output).grid(row=0, column=1, sticky='e', padx=(6, 0))
         box = tk.Frame(wrap, bg='#111827', bd=0)
         box.grid(row=1, column=0, sticky='nsew')
         box.rowconfigure(0, weight=1); box.columnconfigure(0, weight=1)
@@ -470,7 +483,11 @@ class VRTab:
         try:
             cfg = get_config(mode)
             rep = analyze(code, date, mode, name, cfg, progress_cb=self._prog_cb())
-            txt = format_report(rep)
+            if mode == 'buffett':
+                from valresearch.report.buffett import format_buffett_report
+                txt = format_buffett_report(rep)
+            else:
+                txt = format_report(rep)
             self.q.put(('report', txt))
         except Exception as e:
             self.q.put(('err', f'分析失败: {type(e).__name__} {e}'))
@@ -491,6 +508,9 @@ class VRTab:
         try:
             cfg = get_config(mode)
             rep = analyze(code, date, mode, name, cfg, progress_cb=self._prog_cb())
+            if mode == 'buffett':
+                from valresearch.report.buffett import buffett_assess
+                rep.signal['buffett'] = buffett_assess(rep)
             import os
             outdir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                   'data', 'vr_reports')
@@ -609,6 +629,11 @@ class VRTab:
         self.out.delete('1.0', 'end')
         self.out.insert('end', text, tag)
         self.out.see('end')
+        self.out.config(state='disabled')
+
+    def _clear_output(self):
+        self.out.config(state='normal')
+        self.out.delete('1.0', 'end')
         self.out.config(state='disabled')
 
     def _show_chart(self, fig):
