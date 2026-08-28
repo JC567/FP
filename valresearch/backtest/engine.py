@@ -272,11 +272,14 @@ def re_evaluate(symbol: str, start: str, end: str, mode: str = 'balanced',
 
 def run_backtest(symbol: str, start: str, end: str, mode: str = 'balanced',
                  cfg=None, benchmark_symbols=('sh000300', 'sh000922', 'sh000923'),
-                 freq: str = 'W', progress_cb=None, allow_sell=None) -> dict:
+                 freq: str = 'W', progress_cb=None, allow_sell=None,
+                 dividend_reinvest: bool = True) -> dict:
     """单股回测：按信号进出场 vs Buy&Hold vs 基准。返回 dict。
 
     allow_sell: None=用 cfg['backtest']['allow_sell'](默认 true 按模型买卖)；
-                False=只买不卖(权重只增不减，适合"模型只用于判断买点"的用法)。
+                 False=只买不卖(权重只增不减，适合"模型只用于判断买点"的用法)。
+    dividend_reinvest: True(默认)=用后复权价(adj_close)，内含"分红次日自动再投"的复利效果；
+                 False=仅用收盘价(不含分红再投)。
     """
     def _prog(p, msg):
         if progress_cb is not None:
@@ -298,8 +301,12 @@ def run_backtest(symbol: str, start: str, end: str, mode: str = 'balanced',
                          end=(pd.to_datetime(end)).strftime('%Y%m%d'))
     px = price.copy()
     px['date'] = pd.to_datetime(px['date'])
-    # 用后复权价算收益(含分红近似)；无后复权则用原价
-    ret_col = 'adj_close' if 'adj_close' in px.columns and px['adj_close'].notna().any() else 'close'
+    # 红利再投(默认): 用后复权价(adj_close)，其已内含"分红次日自动再投"的复利效果；
+    # 关闭则只用收盘价(不含分红再投)。
+    if dividend_reinvest and 'adj_close' in px.columns and px['adj_close'].notna().any():
+        ret_col = 'adj_close'
+    else:
+        ret_col = 'close'
     px = px.set_index('date')
     full_ret = px[ret_col].pct_change().dropna()
     full_ret.index = pd.to_datetime(full_ret.index)
@@ -321,6 +328,7 @@ def run_backtest(symbol: str, start: str, end: str, mode: str = 'balanced',
 
     bench = None
     bench_used = None
+    bench_equity = None
     for bsym in benchmark_symbols:
         b = fetch_benchmark(bsym, start, end)
         if b is not None and len(b) > 20:
@@ -328,11 +336,25 @@ def run_backtest(symbol: str, start: str, end: str, mode: str = 'balanced',
             bench_used = bsym
             break
 
+    # 10年期国债无风险收益率曲线（用于收益率走势图对比）
+    rf_series = None
+    try:
+        from valresearch.data.providers import MacroDataProvider
+        bond_full = MacroDataProvider().get_bond_yield(start=start, end=end)
+        if bond_full is not None and not bond_full.empty:
+            bf = bond_full.copy()
+            bf['date'] = pd.to_datetime(bf['date'])
+            bf = bf.set_index('date').sort_index()
+            rf_series = bf['cn10y'].reindex(full_ret.index, method='ffill').bfill()
+    except Exception:
+        rf_series = None
+
     res = {
         'ok': True,
         'symbol': symbol, 'mode': mode, 'start': start, 'end': end,
         'rebalance_freq': freq,
         'allow_sell': bool(bt_cfg.get('allow_sell', True)),
+        'dividend_reinvest': bool(dividend_reinvest),
         'strategy': perf_metrics(strat_equity, bench['close'] if bench is not None else None),
         'buy_and_hold': perf_metrics(bh_equity),
         'benchmark_symbol': bench_used,
@@ -343,10 +365,27 @@ def run_backtest(symbol: str, start: str, end: str, mode: str = 'balanced',
             ('只买不卖模式(allow_sell=false)：模型仅用于判断买点，权重只增不减，卖出信号仅阻止新增买入。'
              if not bt_cfg.get('allow_sell', True) else
              '策略按真实仓位系统(target_weight)持仓并归一化到单股上限(max_position)做单股择时仓位，未满仓；已按单边成本(交易费率+滑点)计调仓摩擦。'),
+            ('红利再投(默认开启)：使用"后复权价"计算收益，已内含"分红次日自动再投"的复利效果；'
+             if dividend_reinvest else
+             '红利再投已关闭：仅用收盘价计算收益，不含分红再投。'),
             ('基准窗口提示: 中证红利(sh000922/923)等指数约2019年起，与个股10年分位窗口不一致，收益对比口径不同。'
              if bench_used and bench_used != 'sh000300' else
              '沪深300基准窗口与个股基本一致。'),
         ],
+        'plot': {
+            'dates': [d.strftime('%Y-%m-%d') for d in full_ret.index],
+            'price_norm': [round(float(x), 4) for x in
+                           (px[ret_col].reindex(full_ret.index).ffill()
+                            / px[ret_col].reindex(full_ret.index).ffill().iloc[0]).tolist()],
+            'strat_equity': [round(float(x), 4) for x in strat_equity.tolist()],
+            'bh_equity': [round(float(x), 4) for x in bh_equity.tolist()],
+            'weight': [round(float(x), 4) for x in weights.tolist()],
+            'benchmark_symbol': bench_used,
+            'benchmark_equity': ([round(float(x), 4) for x in bench_equity.tolist()]
+                                 if bench_equity is not None else None),
+            'rf_yield': ([None if pd.isna(x) else round(float(x), 3) for x in rf_series.tolist()]
+                         if rf_series is not None else None),
+        },
     }
     if bench is not None:
         bm = bench.copy()
@@ -354,6 +393,7 @@ def run_backtest(symbol: str, start: str, end: str, mode: str = 'balanced',
         bm = bm.set_index('date').sort_index()
         bench_ret = bm['close'].pct_change().dropna()
         bm_ret = bench_ret.reindex(full_ret.index).ffill().fillna(0.0)
-        res['benchmark_metrics'] = perf_metrics((1 + bm_ret).cumprod())
+        bench_equity = (1 + bm_ret).cumprod()
+        res['benchmark_metrics'] = perf_metrics(bench_equity)
     _prog(1.0, '回测完成')
     return res

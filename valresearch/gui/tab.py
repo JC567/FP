@@ -214,6 +214,16 @@ HELP_BACKTEST = (
     '   · 总收益率：全程总账\n'
     '   · 信号分布：这几年里每个信号各出现多少次\n'
     '\n'
+    '⑦ 两个可选开关（页签工具条）：\n'
+    '   · 只买不卖：勾选后模型只用于"判断买点"，卖出信号不再减仓，\n'
+    '     仓位只增不减（适合把本系统当"建仓触发器"的用法）。\n'
+    '   · 红利再投：默认勾选，用"后复权价"算收益，已内含"分红次日自动再投"的复利；\n'
+    '     取消勾选则只用收盘价（不含分红再投），便于对比"纯价"表现。\n'
+    '\n'
+    '⑧ 回测结果图：\n'
+    '   · 上图"走势图"：股价走势 + 各策略净值曲线，并标出策略的买入点(▲绿)/卖出点(▼红)。\n'
+    '   · 下图"收益率走势图"：各策略累计净值，并叠加 10 年期国债无风险收益率(%) 做对比基准。\n'
+    '\n'
     '务必冷静看待：\n'
     '· 过去赚钱≠未来赚钱，回测只是检验信号逻辑是否合理。\n'
     '· 存在幸存者偏差（只有活到现在的公司才有数据）与过拟合风险。\n'
@@ -317,6 +327,12 @@ class VRTab:
         self.btn_bt = ttk.Button(bar, text='单股回测', style='Accent.TButton', command=self._backtest)
         self.btn_bt.pack(side='left', padx=(4, 0))
 
+        # 回测开关
+        self.var_nosell = tk.BooleanVar(value=False)
+        self.var_dr = tk.BooleanVar(value=True)
+        ttk.Checkbutton(bar, text='只买不卖', variable=self.var_nosell).pack(side='left', padx=(6, 0))
+        ttk.Checkbutton(bar, text='红利再投', variable=self.var_dr).pack(side='left', padx=(4, 0))
+
         # 帮助按钮
         ttk.Button(bar, text='? 帮助说明', style='Small.TButton',
                    command=self._show_help_menu).pack(side='right')
@@ -349,6 +365,13 @@ class VRTab:
                                              fg='#e5e7eb', insertbackground='white')
         self.out.grid(row=0, column=0, sticky='nsew')
         self.out.tag_config('err', foreground='#f87171')
+
+        # 回测图区（走势图 + 收益率走势图）
+        self.chart_host = tk.Frame(self.tab, bg=BG)
+        self.chart_host.grid(row=5, column=0, sticky='nsew', pady=(6, 0))
+        self.chart_host.rowconfigure(0, weight=1); self.chart_host.columnconfigure(0, weight=1)
+        self._chart_canvas = None
+        self.tab.rowconfigure(5, weight=3)
 
     # ---------- 帮助弹框 ----------
     def _show_help_menu(self):
@@ -450,14 +473,26 @@ class VRTab:
             messagebox.showwarning('提示', str(e))
             return
         self._set_busy(True, '准备回测…')
-        threading.Thread(target=self._work_bt, args=(code, mode), daemon=True).start()
+        allow_sell = not self.var_nosell.get()
+        dividend_reinvest = self.var_dr.get()
+        threading.Thread(target=self._work_bt, args=(code, mode, allow_sell, dividend_reinvest),
+                         daemon=True).start()
 
-    def _work_bt(self, code, mode):
+    def _work_bt(self, code, mode, allow_sell, dividend_reinvest):
         try:
             cfg = get_config(mode)
             res = run_backtest(code, '2019-01-01', '2025-12-31', mode, cfg,
-                               progress_cb=self._prog_cb())
+                               progress_cb=self._prog_cb(),
+                               allow_sell=allow_sell, dividend_reinvest=dividend_reinvest)
             self.q.put(('report', self._bt_summary(res)))
+            if res.get('ok'):
+                try:
+                    from valresearch.backtest import make_backtest_figure
+                    fig = make_backtest_figure(res)
+                    if fig is not None:
+                        self.q.put(('chart', fig))
+                except Exception as e:
+                    self.q.put(('err', f'绘图失败(不影响文本): {type(e).__name__} {e}'))
         except Exception as e:
             self.q.put(('err', f'回测失败: {type(e).__name__} {e}'))
 
@@ -468,32 +503,30 @@ class VRTab:
         L = []
         A = L.append
         A('=' * 64)
-        A(f'单股历史重估回测 · {res["symbol"]} · {res["start"]}~{res["end"]} · 模式={cn(res["mode"])} · 再平衡={res["rebalance_freq"]}')
+        A(f"单股历史重估回测 · {res['symbol']} · {res['start']}~{res['end']} · 模式={cn(res['mode'])} · 再平衡={res['rebalance_freq']}")
         A('=' * 64)
+        A(f"持仓规则：{'只买不卖（模型仅判断买点）' if not res.get('allow_sell') else '按信号买卖（含卖出）'}")
+        A(f"分红处理：{'红利再投（后复权，分红次日自动再投）' if res.get('dividend_reinvest') else '不复投（仅收盘价）'}")
 
-        def row(m):
+        def row_cn(m):
             if not m:
                 return '  --'
-            parts = []
-            for k in ('cagr', 'annual_volatility', 'sharpe', 'max_drawdown', 'calmar', 'total_return'):
-                if m.get(k) is not None:
-                    parts.append(f'{k}={m[k]}')
+            parts = [f'{k}={v}' for k, v in cn_metrics(m).items() if v is not None]
             return '  ' + ' | '.join(parts) if parts else '  --'
 
-        def titled(label, m):
-            A(label + ':')
-            A(row(m))
-
-        A('策略(按信号进出场):')
-        A(row(res['strategy']))
-        A('买入并持有(全程满仓):')
-        A(row(res['buy_and_hold']))
+        A('【策略（按信号进出场）】')
+        A(row_cn(res['strategy']))
+        A('【买入并持有（全程满仓）】')
+        A(row_cn(res['buy_and_hold']))
         if res.get('benchmark_metrics'):
-            A(f'基准指数({res.get("benchmark_symbol")}):')
-            A(row(res['benchmark_metrics']))
-        A('信号分布: ' + ', '.join(f'{cn(k)}={v}' for k, v in res.get('signal_counts', {}).items()))
-        A('平均质量分 %s | 平均综合分 %s' % (res.get('avg_quality'), res.get('avg_score')))
+            A(f"【基准指数（{res.get('benchmark_symbol')}）】")
+            A(row_cn(res['benchmark_metrics']))
+        A('信号分布：' + '，'.join(f'{cn(k)}={v}' for k, v in res.get('signal_counts', {}).items()))
+        A('平均质量分 %s ｜ 平均综合分 %s' % (res.get('avg_quality'), res.get('avg_score')))
+        for note in res.get('notes', []):
+            A('· ' + note)
         A('=' * 64)
+        A('说明：净值起点=1；策略按单股上限归一化仓位、已计交易成本。下方为走势与收益率曲线（含买卖点）。')
         return '\n'.join(L)
 
     # ---------- 队列轮询 ----------
@@ -509,6 +542,8 @@ class VRTab:
                     self.progress['value'] = 100
                     self._append(item[1])
                     self._set_busy(False, '完成')
+                elif kind == 'chart':
+                    self._show_chart(item[1])
                 elif kind == 'err':
                     self._append(item[1] + '\n', 'err')
                     self._set_busy(False, '失败')
@@ -522,6 +557,22 @@ class VRTab:
         self.out.insert('end', text, tag)
         self.out.see('end')
         self.out.config(state='disabled')
+
+    def _show_chart(self, fig):
+        """在主线程把回测 Figure 嵌入 Tk（FigureCanvasTkAgg）。"""
+        try:
+            import matplotlib
+            matplotlib.use('Agg')
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+            for w in list(self.chart_host.winfo_children()):
+                w.destroy()
+            canvas = FigureCanvasTkAgg(fig, master=self.chart_host)
+            canvas.draw()
+            widget = canvas.get_tk_widget()
+            widget.grid(row=0, column=0, sticky='nsew')
+            self._chart_canvas = canvas
+        except Exception as e:
+            self._append(f'图表显示失败: {e}\n', 'err')
 
     def _set_busy(self, busy, text):
         self.busy = busy
