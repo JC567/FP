@@ -115,6 +115,8 @@ def make_backtest_figure(res: dict):
                      if plot.get('mode_strategy') else None)
     mode_smart = (np.asarray(plot.get('mode_smart'), dtype=float)
                   if plot.get('mode_smart') else None)
+    mode_buffett = (np.asarray(plot.get('mode_buffett'), dtype=float)
+                    if plot.get('mode_buffett') else None)
     budget = res.get('budget')
     if mode_monthly is not None and mode_monthly.size:
         ax2.plot(dates, mode_monthly, color='#2563eb', lw=1.6, label='每月定投')
@@ -122,6 +124,8 @@ def make_backtest_figure(res: dict):
             ax2.plot(dates, mode_strategy, color='#f59e0b', lw=1.5, label='策略买点')
         if mode_smart is not None and mode_smart.size:
             ax2.plot(dates, mode_smart, color='#8b5cf6', lw=1.5, label='智能定投')
+        if mode_buffett is not None and mode_buffett.size:
+            ax2.plot(dates, mode_buffett, color='#0ea5e9', lw=1.7, label='巴菲特模式')
         ylabel = '资产(元)' + (f' · 每年预算{budget:.0f}' if budget else '')
         ax2.set_ylabel(ylabel, fontsize=9)
     else:

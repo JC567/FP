@@ -77,17 +77,25 @@ def _equity_with_cost(rets, weights, unit_cost):
 
 _BUY_SET = {'BUY', 'STRONG_BUY', 'ACCUMULATE'}
 
+# 巴菲特模式触发阈值：质量分高(护城河扎实) + Gordon合理PE留安全边际 + 非价值陷阱
+_BUFFETT_QUALITY_MIN = 60.0     # 质量分(0-100)下限，越高护城河越扎实
+_BUFFETT_VTSCORE_MAX = 50.0     # 价值陷阱分上限，越低越不是陷阱
+_BUFFETT_FAIR_RATIO_MAX = 0.8   # cur_pe/Gordon合理PE <= 0.8 => 价≤合理价×0.8，留 20% 安全边际
+
 
 def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_dy,
-                           annual_budget=500000.0, rf_yield=None):
-    """资本预算回测：每年注入 annual_budget，比较三种建仓模式（价格用 px_price，含分红再投则用后复权）。
+                           annual_budget=500000.0, rf_yield=None, reb_buffett=None):
+    """资本预算回测：每年注入 annual_budget，比较四种建仓模式（价格用 px_price，含分红再投则用后复权）。
 
     返回 {mode: {'value': Series(每日资产=持股*价+现金), 'invested': 累计投入}}。
-      · monthly  每月定投：每月首个交易日投入 annual_budget/12（现金不足则投入剩余）。
-      · strategy 策略买点：出现买入类信号(买入/强烈买入/逢低吸纳)时，把当时全部可用现金一次买完；
+      · monthly   每月定投：每月首个交易日投入 annual_budget/12（现金不足则投入剩余）。
+      · strategy  策略买点：出现买入类信号(买入/强烈买入/逢低吸纳)时，把当时全部可用现金一次买完；
                           当年无买点则现金自然留存到下一年（预算每年照常注入）。
-      · smart   智能定投：每月定投基数 annual_budget/12，按估值分位动态调节当月金额
+      · smart     智能定投：每月定投基数 annual_budget/12，按估值分位动态调节当月金额
                           (便宜多买、贵了少买)：cheap=(股息率分位-PE分位)/100，倍数=clamp(1+cheap,0.5,2.0)。
+      · buffett   巴菲特模式：仅在" quality高(护城河扎实) + Gordon合理PE留安全边际(价≤合理价×0.8)
+                  + 非价值陷阱 "同时成立时建仓，且低估区分批（每月额度）买入、永不卖出(持有 forever)；
+                  不满足条件则现金留存（吃国债利息）到下个机会。
     现金每年初注入 annual_budget；分红已含于后复权价，不再单独处理。
     闲置现金每日按 10Y 国债收益率(rf_yield, 年化%、与 dates 对齐) 复利计息（自动"买国债"），
     买点/定投触发时连本带息一并换入股；rf_yield 为 None 则不计息（现金闲置）。
@@ -95,10 +103,13 @@ def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_d
     price = pd.to_numeric(px_price, errors='coerce').reindex(dates)
     reb_df = pd.DataFrame({'signal': list(reb_signal), 'pe': list(reb_pe), 'dy': list(reb_dy)},
                           index=pd.to_datetime(list(reb_dates)))
+    if reb_buffett is not None:
+        reb_df['buffett'] = list(reb_buffett)
     reb_df = reb_df.reindex(dates, method='pad')
     n = len(dates)
     monthly = annual_budget / 12.0
     is_buy = reb_df['signal'].isin(_BUY_SET).fillna(False).to_numpy()
+    is_buffett = reb_df['buffett'].fillna(False).to_numpy().astype(bool) if 'buffett' in reb_df else None
     pe = reb_df['pe'].to_numpy()
     dy = reb_df['dy'].to_numpy()
     rf = np.asarray(rf_yield, dtype=float) if rf_yield is not None else None
@@ -147,11 +158,19 @@ def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_d
                         cash -= amt
                         invested += amt
                     last_month = d.month
+            elif kind == 'buffett':
+                if last_month != d.month and is_buffett is not None and is_buffett[i] \
+                        and cash > 0 and p and p > 0:
+                    amt = min(monthly, cash)   # 低估区分批：每月额度，连续低估则逐月买
+                    shares += amt / p
+                    cash -= amt
+                    invested += amt
+                    last_month = d.month
             vals[i] = (shares * p if p == p else shares * 0.0) + cash
         return vals, invested
 
     out = {}
-    for k in ('monthly', 'strategy', 'smart'):
+    for k in ('monthly', 'strategy', 'smart', 'buffett'):
         v, inv = _sim(k)
         s = pd.Series(v, index=dates)
         out[k] = {'value': s, 'invested': float(inv)}
@@ -274,6 +293,8 @@ def _signal_at(t, ser, price, fin, div, bond, ind, industry_type, cfg, prev=None
         'spread': spread, 'rf': rf, 'quality': quality['score'],
         'vt_score': vtres['score'],
         'vt': vtres,               # P0-E: 完整 value_trap 对象(score/level/flags/penalty)
+        'pe_fair_ratio': ratio,    # cur_pe / Gordon 合理PE（<=1 表示低于合理价）
+        'gordon_status': gordon_status,
         'score': sig['score'],
         'rule_signal': sig['rule_signal'], 'final_signal': sig['final_signal'],
         'a': sig['condition_a'], 'b': sig['condition_b'], 'c': sig['condition_c'],
@@ -353,7 +374,7 @@ def re_evaluate(symbol: str, start: str, end: str, mode: str = 'balanced',
     return pd.DataFrame(rows).set_index('t')
 
 
-def run_backtest(symbol: str, start: str, end: str, mode: str = 'balanced',
+def run_backtest(symbol: str, start: str, end: str = None, mode: str = 'balanced',
                  cfg=None, benchmark_symbols=('sh000300', 'sh000922', 'sh000923'),
                  freq: str = 'W', progress_cb=None, allow_sell=None,
                  dividend_reinvest: bool = True, annual_budget: float = 500000.0) -> dict:
@@ -371,6 +392,8 @@ def run_backtest(symbol: str, start: str, end: str, mode: str = 'balanced',
             except Exception:
                 pass
     cfg = cfg or cfgmod.get_config(mode)
+    if not end:
+        end = pd.Timestamp.today().strftime('%Y-%m-%d')   # 未指定结束日 => 取到今天
     if allow_sell is not None:
         import copy
         cfg = copy.deepcopy(cfg)
@@ -384,6 +407,7 @@ def run_backtest(symbol: str, start: str, end: str, mode: str = 'balanced',
                          end=(pd.to_datetime(end)).strftime('%Y%m%d'))
     px = price.copy()
     px['date'] = pd.to_datetime(px['date'])
+    actual_end = str(px['date'].max())[:10]   # 最近一个交易日（数据可得的最后交易日）
     # 红利再投(默认): 用后复权价(adj_close)，其已内含"分红次日自动再投"的复利效果；
     # 关闭则只用收盘价(不含分红再投)。
     if dividend_reinvest and 'adj_close' in px.columns and px['adj_close'].notna().any():
@@ -393,7 +417,7 @@ def run_backtest(symbol: str, start: str, end: str, mode: str = 'balanced',
     px = px.set_index('date')
     full_ret = px[ret_col].pct_change().dropna()
     full_ret.index = pd.to_datetime(full_ret.index)
-    lo, hi = pd.to_datetime(start), pd.to_datetime(end)
+    lo, hi = pd.to_datetime(start), pd.to_datetime(actual_end)
     full_ret = full_ret[(full_ret.index >= lo) & (full_ret.index <= hi)]
 
     # 持仓权重序列（日频，真正用仓位系统 target_weight + 完整 value_trap 对象）：再平衡日之间 forward-fill，T+1 执行
@@ -440,10 +464,21 @@ def run_backtest(symbol: str, start: str, end: str, mode: str = 'balanced',
     reb_signal = df['final_signal'].astype(str).tolist()
     reb_pe = df['pe_pct'].astype(float).tolist() if 'pe_pct' in df.columns else [np.nan] * len(df)
     reb_dy = df['dy_pct'].astype(float).tolist() if 'dy_pct' in df.columns else [np.nan] * len(df)
+    # 巴菲特模式触发：质量高 + Gordon合理PE留安全边际 + 非价值陷阱
+    q = pd.to_numeric(df.get('quality'), errors='coerce') if 'quality' in df.columns else pd.Series([np.nan] * len(df))
+    vt = pd.to_numeric(df.get('vt_score'), errors='coerce') if 'vt_score' in df.columns else pd.Series([np.nan] * len(df))
+    fr = pd.to_numeric(df.get('pe_fair_ratio'), errors='coerce') if 'pe_fair_ratio' in df.columns else pd.Series([np.nan] * len(df))
+    gs = df.get('gordon_status') if 'gordon_status' in df.columns else pd.Series([''] * len(df))
+    reb_buffett = (
+        (q >= _BUFFETT_QUALITY_MIN) &
+        (vt <= _BUFFETT_VTSCORE_MAX) &
+        (fr.notna()) & (fr <= _BUFFETT_FAIR_RATIO_MAX)
+    ).fillna(False).astype(bool).tolist()
     cap = simulate_capital_modes(price_daily, dates_cap, reb_dates, reb_signal,
                                  reb_pe, reb_dy, annual_budget,
                                  rf_yield=(rf_series.reindex(dates_cap, method='ffill').bfill()
-                                           if rf_series is not None else None))
+                                           if rf_series is not None else None),
+                                 reb_buffett=reb_buffett)
 
     def _mode_metrics(m):
         s = m['value']
@@ -462,7 +497,7 @@ def run_backtest(symbol: str, start: str, end: str, mode: str = 'balanced',
 
     res = {
         'ok': True,
-        'symbol': symbol, 'mode': mode, 'start': start, 'end': end,
+        'symbol': symbol, 'mode': mode, 'start': start, 'end': actual_end,
         'rebalance_freq': freq,
         'allow_sell': bool(bt_cfg.get('allow_sell', True)),
         'dividend_reinvest': bool(dividend_reinvest),
@@ -481,7 +516,7 @@ def run_backtest(symbol: str, start: str, end: str, mode: str = 'balanced',
             ('红利再投(默认开启)：使用"后复权价"计算收益，已内含"分红次日自动再投"的复利效果；'
              if dividend_reinvest else
              '红利再投已关闭：仅用收盘价计算收益，不含分红再投。'),
-            ('资本预算：每年 %.0f 元，比较三种建仓模式——每月定投 / 策略买点(信号触发一次买完) / 智能定投(按估值分位动态调节每月金额)。'
+            ('资本预算：每年 %.0f 元，比较四种建仓模式——每月定投 / 策略买点(信号触发一次买完) / 智能定投(按估值分位动态调节每月金额) / 巴菲特模式(质量高+Gordon安全边际+非陷阱才买，低估区分批、持有 forever)。'
              % annual_budget),
             ('闲置现金自动买入10Y国债按日复利计息（买点/定投触发时连本带息换股）；等待期间不再白白闲置。'),
             ('基准窗口提示: 中证红利(sh000922/923)等指数约2019年起，与个股10年分位窗口不一致，收益对比口径不同。'
@@ -506,6 +541,7 @@ def run_backtest(symbol: str, start: str, end: str, mode: str = 'balanced',
             'mode_monthly': cap_plot['monthly'],
             'mode_strategy': cap_plot['strategy'],
             'mode_smart': cap_plot['smart'],
+            'mode_buffett': cap_plot['buffett'],
         },
     }
     if bench is not None:

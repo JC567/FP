@@ -127,10 +127,10 @@ def test_run_backtest_plot_keys():
         return
     assert 'plot' in res and res['plot'].get('dates'), '应返回 plot 序列'
     assert res.get('dividend_reinvest') is True
-    for k in ('mode_monthly', 'mode_strategy', 'mode_smart'):
+    for k in ('mode_monthly', 'mode_strategy', 'mode_smart', 'mode_buffett'):
         assert res['plot'].get(k) is not None, '应返回资本模式序列 ' + k
         assert len(res['plot'][k]) == len(res['plot']['dates']), '模式序列长度应一致'
-    assert res.get('modes') and set(res['modes']) >= {'monthly', 'strategy', 'smart'}, '应含三种模式指标'
+    assert res.get('modes') and set(res['modes']) >= {'monthly', 'strategy', 'smart', 'buffett'}, '应含四种模式指标'
     fig = make_backtest_figure(res)
     assert fig is not None
     plt.close(fig)
@@ -180,6 +180,32 @@ def test_simulate_capital_modes_rf_idle():
     print('test_simulate_capital_modes_rf_idle OK idle_grown=%.0f' % s.iloc[-1])
 
 
+def test_simulate_capital_modes_buffett():
+    dates = pd.date_range('2020-01-01', '2021-12-31', freq='B')
+    price = pd.Series(np.linspace(10.0, 12.0, len(dates)), index=dates)
+    reb_signal = ['WAIT'] * len(dates)
+    reb_pe = [np.nan] * len(dates)
+    reb_dy = [np.nan] * len(dates)
+    # 巴菲特触发：全程为真 => 等价于每月定投（每月额度、低估区分批）
+    reb_buffett_all = [True] * len(dates)
+    cap_all = simulate_capital_modes(price, dates, dates.tolist(), reb_signal, reb_pe, reb_dy,
+                                     500000.0, reb_buffett=reb_buffett_all)
+    assert cap_all['buffett']['invested'] == cap_all['monthly']['invested'], (
+        cap_all['buffett']['invested'], cap_all['monthly']['invested'])
+    # 巴菲特触发：全程为假 => 永不建仓，invested=0（现金吃国债/闲置）
+    cap_none = simulate_capital_modes(price, dates, dates.tolist(), reb_signal, reb_pe, reb_dy,
+                                      500000.0, reb_buffett=[False] * len(dates))
+    assert cap_none['buffett']['invested'] == 0.0
+    # 巴菲特触发：仅前 6 个月为真 => 投入应明显少于每月定投全年，且 >0
+    half = dates[0] + pd.Timedelta(days=180)
+    rb = [d <= half for d in dates]
+    cap_half = simulate_capital_modes(price, dates, dates.tolist(), reb_signal, reb_pe, reb_dy,
+                                      500000.0, reb_buffett=rb)
+    assert 0 < cap_half['buffett']['invested'] < cap_half['monthly']['invested'], cap_half['buffett']['invested']
+    print('test_simulate_capital_modes_buffett OK invested_all=%.0f invested_half=%.0f'
+          % (cap_all['buffett']['invested'], cap_half['buffett']['invested']))
+
+
 if __name__ == '__main__':
     test_buy_sell_dates()
     test_make_figure_with_rf()
@@ -190,4 +216,5 @@ if __name__ == '__main__':
     test_reb_markers_nosell()
     test_simulate_capital_modes()
     test_simulate_capital_modes_rf_idle()
+    test_simulate_capital_modes_buffett()
     print('== P0-10 单股回测图表/中文/开关 全部通过 ==')
