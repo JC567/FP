@@ -158,6 +158,28 @@ def test_simulate_capital_modes():
           % (cap['monthly']['invested'], cap['strategy']['invested'], cap['smart']['invested']))
 
 
+def test_simulate_capital_modes_rf_idle():
+    # 全程无买点(全 WAIT) + 10Y国债 3%：闲置现金应按国债每日复利，不再闲置
+    dates = pd.date_range('2020-01-01', '2021-12-31', freq='B')
+    price = pd.Series(np.full(len(dates), 10.0), index=dates)
+    reb_signal = ['WAIT'] * len(dates)
+    reb_pe = [np.nan] * len(dates)
+    reb_dy = [np.nan] * len(dates)
+    rf = [3.0] * len(dates)   # 年化 3%
+    cap = simulate_capital_modes(price, dates, dates.tolist(), reb_signal, reb_pe, reb_dy,
+                                  500000.0, rf_yield=rf)
+    s = cap['strategy']['value']
+    # 两年各注入 50万，从未部署 → invested=0，资产应 > 100万（吃国债利息）
+    assert cap['strategy']['invested'] == 0.0
+    assert s.iloc[-1] > 1_000_000, s.iloc[-1]
+    # 上限：远小于一次性从 day0 复利两年 500000*(1.03)^2*2 ≈ 2,060,900（因为预算分两年注入）
+    assert s.iloc[-1] < 1_500_000, s.iloc[-1]
+    # 对照：无 rf 时资产恒等于累计预算（不增长）
+    cap0 = simulate_capital_modes(price, dates, dates.tolist(), reb_signal, reb_pe, reb_dy, 500000.0)
+    assert cap0['strategy']['value'].iloc[-1] == 1_000_000.0, cap0['strategy']['value'].iloc[-1]
+    print('test_simulate_capital_modes_rf_idle OK idle_grown=%.0f' % s.iloc[-1])
+
+
 if __name__ == '__main__':
     test_buy_sell_dates()
     test_make_figure_with_rf()
@@ -167,4 +189,5 @@ if __name__ == '__main__':
     test_run_backtest_plot_keys()
     test_reb_markers_nosell()
     test_simulate_capital_modes()
+    test_simulate_capital_modes_rf_idle()
     print('== P0-10 单股回测图表/中文/开关 全部通过 ==')

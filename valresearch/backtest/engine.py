@@ -79,7 +79,7 @@ _BUY_SET = {'BUY', 'STRONG_BUY', 'ACCUMULATE'}
 
 
 def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_dy,
-                           annual_budget=500000.0):
+                           annual_budget=500000.0, rf_yield=None):
     """资本预算回测：每年注入 annual_budget，比较三种建仓模式（价格用 px_price，含分红再投则用后复权）。
 
     返回 {mode: {'value': Series(每日资产=持股*价+现金), 'invested': 累计投入}}。
@@ -89,6 +89,8 @@ def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_d
       · smart   智能定投：每月定投基数 annual_budget/12，按估值分位动态调节当月金额
                           (便宜多买、贵了少买)：cheap=(股息率分位-PE分位)/100，倍数=clamp(1+cheap,0.5,2.0)。
     现金每年初注入 annual_budget；分红已含于后复权价，不再单独处理。
+    闲置现金每日按 10Y 国债收益率(rf_yield, 年化%、与 dates 对齐) 复利计息（自动"买国债"），
+    买点/定投触发时连本带息一并换入股；rf_yield 为 None 则不计息（现金闲置）。
     """
     price = pd.to_numeric(px_price, errors='coerce').reindex(dates)
     reb_df = pd.DataFrame({'signal': list(reb_signal), 'pe': list(reb_pe), 'dy': list(reb_dy)},
@@ -99,6 +101,7 @@ def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_d
     is_buy = reb_df['signal'].isin(_BUY_SET).fillna(False).to_numpy()
     pe = reb_df['pe'].to_numpy()
     dy = reb_df['dy'].to_numpy()
+    rf = np.asarray(rf_yield, dtype=float) if rf_yield is not None else None
 
     def _sim(kind):
         shares = 0.0
@@ -113,6 +116,11 @@ def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_d
             if cur_year != yr:
                 cash += annual_budget
                 cur_year = yr
+            # 闲置现金按 10Y 国债每日复利计息（自动买国债）
+            if rf is not None:
+                r = rf[i]
+                if r == r and r > 0:   # 非 NaN 且为正
+                    cash *= (1.0 + r / 100.0) ** (1.0 / 252.0)
             p = price.iloc[i]
             if kind == 'monthly':
                 if last_month != d.month:
@@ -433,7 +441,9 @@ def run_backtest(symbol: str, start: str, end: str, mode: str = 'balanced',
     reb_pe = df['pe_pct'].astype(float).tolist() if 'pe_pct' in df.columns else [np.nan] * len(df)
     reb_dy = df['dy_pct'].astype(float).tolist() if 'dy_pct' in df.columns else [np.nan] * len(df)
     cap = simulate_capital_modes(price_daily, dates_cap, reb_dates, reb_signal,
-                                 reb_pe, reb_dy, annual_budget)
+                                 reb_pe, reb_dy, annual_budget,
+                                 rf_yield=(rf_series.reindex(dates_cap, method='ffill').bfill()
+                                           if rf_series is not None else None))
 
     def _mode_metrics(m):
         s = m['value']
@@ -473,6 +483,7 @@ def run_backtest(symbol: str, start: str, end: str, mode: str = 'balanced',
              '红利再投已关闭：仅用收盘价计算收益，不含分红再投。'),
             ('资本预算：每年 %.0f 元，比较三种建仓模式——每月定投 / 策略买点(信号触发一次买完) / 智能定投(按估值分位动态调节每月金额)。'
              % annual_budget),
+            ('闲置现金自动买入10Y国债按日复利计息（买点/定投触发时连本带息换股）；等待期间不再白白闲置。'),
             ('基准窗口提示: 中证红利(sh000922/923)等指数约2019年起，与个股10年分位窗口不一致，收益对比口径不同。'
              if bench_used and bench_used != 'sh000300' else
              '沪深300基准窗口与个股基本一致。'),
