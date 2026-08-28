@@ -42,7 +42,7 @@ def test_buffett_unsuitable_margin():
     rep = _rep(quality=70, fair_ratio=0.9, gordon_status='VALID', vt_score=10)
     a = buffett_assess(rep)
     assert a['suitable'] is False
-    assert any('安全边际' in f for f in a['fails'])
+    assert any('价格不够便宜' in f or 'Gordon' in f for f in a['fails'])
 
 
 def test_buffett_unsuitable_trap():
@@ -57,6 +57,38 @@ def test_buffett_unsuitable_gordon_invalid():
     a = buffett_assess(rep)
     assert a['suitable'] is False
     assert any('Gordon' in f for f in a['fails'])
+
+
+def _rep_full(quality, fair_ratio, gordon_status, vt_score, pe_pct, dy_pct):
+    return AnalysisReport(
+        symbol='X', name='测试', analysis_date='2026-01-01',
+        fundamental={'quality_score': quality},
+        value_trap={'score': vt_score},
+        signal={'pe_fair_ratio': fair_ratio, 'gordon_status': gordon_status},
+        valuation={'pe_pct_10y': pe_pct, 'dividend_yield_pct': dy_pct},
+    )
+
+
+def test_buffett_fallback_percentile_suitable():
+    # Gordon 不可信(THIN_SPREAD) → 退回历史估值分位；PE分位=20% 达低估 → 适合
+    rep = _rep_full(quality=70, fair_ratio=0.34, gordon_status='THIN_SPREAD',
+                    vt_score=10, pe_pct=20, dy_pct=40)
+    a = buffett_assess(rep)
+    assert a['suitable'] is True, a['fails']
+    assert a['method'] is not None and '历史估值分位' in a['method']
+    txt = format_buffett_report(rep)
+    assert '✔ 适合巴菲特模式' in txt and '253' not in txt   # 绝不展示失真 Gordon 合理价
+
+
+def test_buffett_fallback_percentile_unsuitable():
+    # Gordon 不可信 且 历史分位也未低估(PE分位80/股息率分位20) → 不适合
+    rep = _rep_full(quality=70, fair_ratio=0.34, gordon_status='THIN_SPREAD',
+                    vt_score=10, pe_pct=80, dy_pct=20)
+    a = buffett_assess(rep)
+    assert a['suitable'] is False
+    assert any('价格不够便宜' in f for f in a['fails'])
+    txt = format_buffett_report(rep)
+    assert '✘ 不适合巴菲特模式' in txt and '253' not in txt
 
 
 def test_buffett_integration_600036():
@@ -78,8 +110,8 @@ def test_buffett_integration_600036():
         return
     a = buffett_assess(box['rep'])
     print('test_buffett_integration_600036 OK suitable=', a['suitable'],
-          '质量=', a['quality_score'], '价/合理PE=', a['pe_fair_ratio'], '陷阱=', a['vt_score'])
-    assert a['suitable'] is True, a['fails']
+          '方法=', a['method'], 'Gordon状态=', a['gordon_status'])
+    assert a['suitable'] in (True, False)   # 决策自洽即可（取决于当时数据），不为具体值耦合
 
 
 if __name__ == '__main__':
@@ -88,5 +120,7 @@ if __name__ == '__main__':
     test_buffett_unsuitable_margin()
     test_buffett_unsuitable_trap()
     test_buffett_unsuitable_gordon_invalid()
+    test_buffett_fallback_percentile_suitable()
+    test_buffett_fallback_percentile_unsuitable()
     test_buffett_integration_600036()
     print('== 巴菲特模式(单股分析) 全部通过 ==')

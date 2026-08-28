@@ -81,6 +81,8 @@ _BUY_SET = {'BUY', 'STRONG_BUY', 'ACCUMULATE'}
 _BUFFETT_QUALITY_MIN = 60.0     # 质量分(0-100)下限，越高护城河越扎实
 _BUFFETT_VTSCORE_MAX = 50.0     # 价值陷阱分上限，越低越不是陷阱
 _BUFFETT_FAIR_RATIO_MAX = 0.8   # cur_pe/Gordon合理PE <= 0.8 => 价≤合理价×0.8，留 20% 安全边际
+_BUFFETT_PE_PCT_MAX = 30.0     # 历史 PE 分位 ≤ 30% 视为"低估"（均衡型买点口径）
+_BUFFETT_DY_PCT_MIN = 70.0     # 历史股息率分位 ≥ 70% 视为"高股息"
 
 
 def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_dy,
@@ -488,15 +490,22 @@ def run_backtest(symbol: str, start: str, end: str = None, mode: str = 'balanced
     reb_signal = df['final_signal'].astype(str).tolist()
     reb_pe = df['pe_pct'].astype(float).tolist() if 'pe_pct' in df.columns else [np.nan] * len(df)
     reb_dy = df['dy_pct'].astype(float).tolist() if 'dy_pct' in df.columns else [np.nan] * len(df)
-    # 巴菲特模式触发：质量高 + Gordon合理PE留安全边际 + 非价值陷阱
+    # 巴菲特模式触发：质量高 + 非价值陷阱 + 价格便宜(留安全边际)。
+    # "便宜"判定须鲁棒：Gordon 可信(VALID)且价≤合理价×0.8 时用 Gordon；否则(A股高股息股多为
+    # THIN_SPREAD，Gordon分母极小、合理PE失真)退回历史估值分位(PE分位≤30% 或 股息率分位≥70%)，
+    # 绝不拿失真的 Gordon 充当安全边际。
     q = pd.to_numeric(df.get('quality'), errors='coerce') if 'quality' in df.columns else pd.Series([np.nan] * len(df))
     vt = pd.to_numeric(df.get('vt_score'), errors='coerce') if 'vt_score' in df.columns else pd.Series([np.nan] * len(df))
     fr = pd.to_numeric(df.get('pe_fair_ratio'), errors='coerce') if 'pe_fair_ratio' in df.columns else pd.Series([np.nan] * len(df))
     gs = df.get('gordon_status') if 'gordon_status' in df.columns else pd.Series([''] * len(df))
+    pe_pct = pd.to_numeric(df.get('pe_pct'), errors='coerce') if 'pe_pct' in df.columns else pd.Series([np.nan] * len(df))
+    dy_pct = pd.to_numeric(df.get('dy_pct'), errors='coerce') if 'dy_pct' in df.columns else pd.Series([np.nan] * len(df))
+    gordon_cheap = (gs.astype(str) == 'VALID') & fr.notna() & (fr <= _BUFFETT_FAIR_RATIO_MAX)
+    pct_cheap = (pe_pct <= _BUFFETT_PE_PCT_MAX) | (dy_pct >= _BUFFETT_DY_PCT_MIN)
     reb_buffett = (
         (q >= _BUFFETT_QUALITY_MIN) &
         (vt <= _BUFFETT_VTSCORE_MAX) &
-        (fr.notna()) & (fr <= _BUFFETT_FAIR_RATIO_MAX)
+        (gordon_cheap | pct_cheap)
     ).fillna(False).astype(bool).tolist()
     cap = simulate_capital_modes(price_daily, dates_cap, reb_dates, reb_signal,
                                  reb_pe, reb_dy, annual_budget,
