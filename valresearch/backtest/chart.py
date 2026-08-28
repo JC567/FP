@@ -33,6 +33,27 @@ def _buy_sell_dates(weight):
     return buys, sells
 
 
+_BUY_SET = {'BUY', 'STRONG_BUY', 'ACCUMULATE'}
+_SELL_SET = {'REDUCE', 'SELL'}
+
+
+def _reb_markers(dates, reb_dates, reb_signal, allow_sell):
+    """按再平衡日信号序列标买卖点：每个买入类/卖出类信号均标一点（对应日志信号分布）。
+    再平衡日可能落在非交易日，用 pad 映射到最近的前一个交易日序号。返回 (buy_idx, sell_idx)。"""
+    di = pd.DatetimeIndex(dates)
+    rd = pd.to_datetime(reb_dates)
+    pos = di.get_indexer(rd, method='pad')
+    buys, sells = [], []
+    for p, sig in zip(pos, reb_signal):
+        if p < 0:
+            continue
+        if sig in _BUY_SET:
+            buys.append(int(p))
+        elif sig in _SELL_SET and allow_sell:
+            sells.append(int(p))
+    return sorted(set(buys)), sorted(set(sells))
+
+
 def make_backtest_figure(res: dict):
     """根据 run_backtest 返回的 dict（含 res['plot']）绘制 Figure。无 plot 数据时返回 None。"""
     plot = res.get('plot')
@@ -65,7 +86,14 @@ def make_backtest_figure(res: dict):
         ax1.plot(dates, bench, color='#16a34a', lw=1.3, ls=':',
                  label=f"基准({plot.get('benchmark_symbol')})")
 
-    buys, sells = _buy_sell_dates(weight)
+    # 买卖点：优先按再平衡日信号序列（每个买入类/卖出类信号标一点，对应日志信号分布）；
+    # 缺失时回退到权重 0->正/正->0 的持仓切换检测。
+    reb_dates = plot.get('reb_dates')
+    reb_signal = plot.get('reb_signal')
+    if reb_dates and reb_signal:
+        buys, sells = _reb_markers(dates, reb_dates, reb_signal, bool(res.get('allow_sell')))
+    else:
+        buys, sells = _buy_sell_dates(weight)
     if buys:
         ax1.scatter(dates[buys], strat[buys], marker='^', color='#22c55e', s=70,
                     zorder=5, label='买入点')

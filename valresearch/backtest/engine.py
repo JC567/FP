@@ -374,6 +374,8 @@ def run_backtest(symbol: str, start: str, end: str, mode: str = 'balanced',
         ],
         'plot': {
             'dates': [d.strftime('%Y-%m-%d') for d in full_ret.index],
+            'reb_dates': [t.strftime('%Y-%m-%d') for t in df.index],
+            'reb_signal': df['final_signal'].astype(str).tolist(),
             'price_norm': [round(float(x), 4) for x in
                            (px[ret_col].reindex(full_ret.index).ffill()
                             / px[ret_col].reindex(full_ret.index).ffill().iloc[0]).tolist()],

@@ -8,7 +8,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from valresearch.backtest.chart import make_backtest_figure, _buy_sell_dates
+from valresearch.backtest.chart import make_backtest_figure, _buy_sell_dates, _reb_markers
 from valresearch.backtest.engine import run_backtest
 
 
@@ -29,6 +29,9 @@ def _fake_res(n=120):
     dates = pd.date_range('2020-01-01', periods=n, freq='D')
     rng = np.random.default_rng(0)
     base = 1 + np.cumsum(rng.normal(0, 0.01, n))
+    # 再平衡信号：每 6 天一个决策日，前 10 个 BUY，后 5 个 REDUCE/SELL（仅 allow_sell 时算卖点）
+    reb_dates = dates[::6]
+    reb_signal = (['BUY'] * 10 + ['REDUCE'] * 5)[:len(reb_dates)]
     return {
         'ok': True, 'symbol': '600036', 'mode': 'balanced',
         'start': '2020-01-01', 'end': '2020-04-30', 'rebalance_freq': 'W',
@@ -36,6 +39,8 @@ def _fake_res(n=120):
         'benchmark_symbol': 'sh000300',
         'plot': {
             'dates': [d.strftime('%Y-%m-%d') for d in dates],
+            'reb_dates': [d.strftime('%Y-%m-%d') for d in reb_dates],
+            'reb_signal': reb_signal,
             'price_norm': list(base),
             'strat_equity': list(base),
             'bh_equity': list(base * 0.9),
@@ -56,8 +61,24 @@ def test_make_figure_with_rf():
     # 应含 买入点/卖出点 散点（PathCollection）
     has_scatter = any(type(c).__name__ == 'PathCollection' for ax in axes for c in ax.collections)
     assert has_scatter, '应含买卖点散点'
+    # 买入点数量应等于再平衡信号中的买入类次数（此处 10 个 BUY）
+    buys, sells = _reb_markers(pd.to_datetime(res['plot']['dates']),
+                               res['plot']['reb_dates'], res['plot']['reb_signal'], True)
+    assert len(buys) == 10, '买入点应对应 10 个 BUY 信号，实际 %d' % len(buys)
+    assert len(sells) == 5, '卖出点应对应 5 个 REDUCE/SELL，实际 %d' % len(sells)
     plt.close(fig)
-    print('test_make_figure_with_rf OK: axes=%d' % len(axes))
+    print('test_make_figure_with_rf OK: axes=%d buys=%d sells=%d' % (len(axes), len(buys), len(sells)))
+
+
+def test_reb_markers_nosell():
+    # 只买不卖：卖点不计入
+    dates = pd.date_range('2020-01-01', periods=60, freq='D')
+    reb_dates = dates[::6]
+    reb_signal = ['BUY'] * 5 + ['SELL'] * 3
+    buys, sells = _reb_markers(dates, [d.strftime('%Y-%m-%d') for d in reb_dates], reb_signal, False)
+    assert len(buys) == 5, buys
+    assert sells == [], '只买不卖不应有卖出点'
+    print('test_reb_markers_nosell OK')
 
 
 def test_make_figure_no_rf():
@@ -119,4 +140,5 @@ if __name__ == '__main__':
     test_make_figure_none()
     test_bt_summary_chinese()
     test_run_backtest_plot_keys()
+    test_reb_markers_nosell()
     print('== P0-10 单股回测图表/中文/开关 全部通过 ==')
