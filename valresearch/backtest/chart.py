@@ -72,10 +72,12 @@ def make_backtest_figure(res: dict):
 
     sym = res.get('symbol', '')
     mode_cn = res.get('mode', '')
+    budget = res.get('budget')
     title = (f"单股历史重估回测 · {sym} · {res.get('start')}~{res.get('end')} · "
              f"模式={mode_cn} · 再平衡={res.get('rebalance_freq')}\n"
              f"{'只买不卖' if not res.get('allow_sell') else '按信号买卖'} · "
-             f"{'红利再投' if res.get('dividend_reinvest') else '不复投'}")
+             f"{'红利再投' if res.get('dividend_reinvest') else '不复投'}"
+             + (f" · 每年预算{budget:.0f}元" if budget else ""))
 
     # ---- 上：走势图 ----
     if price.size:
@@ -106,13 +108,30 @@ def make_backtest_figure(res: dict):
     ax1.legend(loc='upper left', fontsize=8, ncol=2)
     ax1.grid(True, ls=':', alpha=0.5)
 
-    # ---- 下：收益率走势图 ----
-    ax2.plot(dates, strat, color='#2563eb', lw=1.6, label='信号策略')
-    ax2.plot(dates, bh, color='#f59e0b', lw=1.4, ls='--', label='买入持有')
-    if bench is not None and bench.size:
-        ax2.plot(dates, bench, color='#16a34a', lw=1.3, ls=':',
-                 label=f"基准({plot.get('benchmark_symbol')})")
-    ax2.set_ylabel('累计净值(收益率)', fontsize=9)
+    # ---- 下：收益率走势图（资本预算各模式对比）----
+    mode_monthly = (np.asarray(plot.get('mode_monthly'), dtype=float)
+                    if plot.get('mode_monthly') else None)
+    mode_strategy = (np.asarray(plot.get('mode_strategy'), dtype=float)
+                     if plot.get('mode_strategy') else None)
+    mode_smart = (np.asarray(plot.get('mode_smart'), dtype=float)
+                  if plot.get('mode_smart') else None)
+    budget = res.get('budget')
+    if mode_monthly is not None and mode_monthly.size:
+        ax2.plot(dates, mode_monthly, color='#2563eb', lw=1.6, label='每月定投')
+        if mode_strategy is not None and mode_strategy.size:
+            ax2.plot(dates, mode_strategy, color='#f59e0b', lw=1.5, label='策略买点')
+        if mode_smart is not None and mode_smart.size:
+            ax2.plot(dates, mode_smart, color='#8b5cf6', lw=1.5, label='智能定投')
+        ylabel = '资产(元)' + (f' · 每年预算{budget:.0f}' if budget else '')
+        ax2.set_ylabel(ylabel, fontsize=9)
+    else:
+        # 回退：原净值曲线
+        ax2.plot(dates, strat, color='#2563eb', lw=1.6, label='信号策略')
+        ax2.plot(dates, bh, color='#f59e0b', lw=1.4, ls='--', label='买入持有')
+        if bench is not None and bench.size:
+            ax2.plot(dates, bench, color='#16a34a', lw=1.3, ls=':',
+                     label=f"基准({plot.get('benchmark_symbol')})")
+        ax2.set_ylabel('累计净值(收益率)', fontsize=9)
     ax2.grid(True, ls=':', alpha=0.5)
 
     if rf is not None and rf.size and not np.all(np.isnan(rf)):

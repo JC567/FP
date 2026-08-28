@@ -9,7 +9,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from valresearch.backtest.chart import make_backtest_figure, _buy_sell_dates, _reb_markers
-from valresearch.backtest.engine import run_backtest
+from valresearch.backtest.engine import run_backtest, simulate_capital_modes
 
 
 def test_buy_sell_dates():
@@ -127,10 +127,35 @@ def test_run_backtest_plot_keys():
         return
     assert 'plot' in res and res['plot'].get('dates'), '应返回 plot 序列'
     assert res.get('dividend_reinvest') is True
+    for k in ('mode_monthly', 'mode_strategy', 'mode_smart'):
+        assert res['plot'].get(k) is not None, '应返回资本模式序列 ' + k
+        assert len(res['plot'][k]) == len(res['plot']['dates']), '模式序列长度应一致'
+    assert res.get('modes') and set(res['modes']) >= {'monthly', 'strategy', 'smart'}, '应含三种模式指标'
     fig = make_backtest_figure(res)
     assert fig is not None
     plt.close(fig)
     print('test_run_backtest_plot_keys OK: 交易日=%d' % len(res['plot']['dates']))
+
+
+def test_simulate_capital_modes():
+    dates = pd.date_range('2020-01-01', '2021-12-31', freq='B')
+    price = pd.Series(np.linspace(10.0, 12.0, len(dates)), index=dates)
+    reb_dates = [dates[30], dates[len(dates) // 2 + 30]]
+    reb_signal = ['BUY', 'ACCUMULATE']
+    reb_pe = [20.0, 80.0]
+    reb_dy = [80.0, 20.0]
+    cap = simulate_capital_modes(price, dates, reb_dates, reb_signal, reb_pe, reb_dy, 500000.0)
+    for k in ('monthly', 'strategy', 'smart'):
+        assert len(cap[k]['value']) == len(dates), k
+        assert cap[k]['invested'] > 0, k
+    # 每月定投：约 24 个月 × (50万/12) ≈ 100万
+    assert abs(cap['monthly']['invested'] - 1_000_000) < 50000, cap['monthly']['invested']
+    # 策略买点：两年各一次触发，每次全额 ≈ 100万
+    assert abs(cap['strategy']['invested'] - 1_000_000) < 1000, cap['strategy']['invested']
+    # 智能定投：便宜/贵各半年，总投入在合理区间
+    assert 300000 < cap['smart']['invested'] <= 1_100_000, cap['smart']['invested']
+    print('test_simulate_capital_modes OK monthly=%.0f strategy=%.0f smart=%.0f'
+          % (cap['monthly']['invested'], cap['strategy']['invested'], cap['smart']['invested']))
 
 
 if __name__ == '__main__':
@@ -141,4 +166,5 @@ if __name__ == '__main__':
     test_bt_summary_chinese()
     test_run_backtest_plot_keys()
     test_reb_markers_nosell()
+    test_simulate_capital_modes()
     print('== P0-10 单股回测图表/中文/开关 全部通过 ==')
