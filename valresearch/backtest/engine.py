@@ -23,6 +23,7 @@ from valresearch.backtest.metrics import metrics as perf_metrics, win_rate
 gg = importlib.import_module('valresearch.valuation.gordon')
 qs = importlib.import_module('valresearch.fundamental.quality_score')
 vt = importlib.import_module('valresearch.risk.value_trap')
+bk = importlib.import_module('valresearch.fundamental.banking')   # 银行专用质量/市净率
 signal_mod = importlib.import_module('valresearch.signal.engine')
 position_mod = importlib.import_module('valresearch.signal.position')
 
@@ -77,12 +78,16 @@ def _equity_with_cost(rets, weights, unit_cost):
 
 _BUY_SET = {'BUY', 'STRONG_BUY', 'ACCUMULATE'}
 
-# 巴菲特模式触发阈值：质量分高(护城河扎实) + Gordon合理PE留安全边际 + 非价值陷阱
-_BUFFETT_QUALITY_MIN = 60.0     # 质量分(0-100)下限，越高护城河越扎实
+# 巴菲特模式触发阈值（仅银行业，能力圈限定）：行业专用质量 + PB破净/历史分位便宜 + 非陷阱
+_BUFFETT_QUALITY_MIN = 60.0     # 通用质量分(0-100)下限（银行业=0.85*银行质量+0.15*行业），仅作兜底
 _BUFFETT_VTSCORE_MAX = 50.0     # 价值陷阱分上限，越低越不是陷阱
-_BUFFETT_FAIR_RATIO_MAX = 0.8   # cur_pe/Gordon合理PE <= 0.8 => 价≤合理价×0.8，留 20% 安全边际
-_BUFFETT_PE_PCT_MAX = 30.0     # 历史 PE 分位 ≤ 30% 视为"低估"（均衡型买点口径）
-_BUFFETT_DY_PCT_MIN = 70.0     # 历史股息率分位 ≥ 70% 视为"高股息"
+_BUFFETT_BANK_ROE_MIN = 10.0    # 银行 ROE(%) 下限（简单口径=归母净利/归母权益）
+_BUFFETT_BANK_EQUITY_MIN = 0.06 # 银行权益比率下限，资本充足代理
+_BUFFETT_BANK_DIV_CONSEC = 5    # 银行连续分红年数下限
+_BUFFETT_BANK_PB_CHEAP = 1.0    # 银行 PB ≤ 1.0（破净）视为便宜
+_BUFFETT_PE_PCT_MAX = 30.0      # 无 PB 时：历史 PE 分位 ≤ 30% 视为"低估"
+_BUFFETT_DY_PCT_MIN = 70.0      # 无 PB 时：历史股息率分位 ≥ 70% 视为"高股息"
+_BUFFETT_SUPPORTED = ('银行',)  # 仅支持银行业
 
 
 def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_dy,
@@ -108,12 +113,14 @@ def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_d
     reb_df = pd.DataFrame({'signal': list(reb_signal), 'pe': list(reb_pe), 'dy': list(reb_dy)},
                           index=pd.to_datetime(list(reb_dates)))
     if reb_buffett is not None:
-        reb_df['buffett'] = list(reb_buffett)
+        reb_df['buffett'] = pd.Series(list(reb_buffett), index=reb_df.index, dtype=bool)
     reb_df = reb_df.reindex(dates, method='pad')
+    if 'buffett' in reb_df:
+        reb_df['buffett'] = reb_df['buffett'].fillna(False)   # 首个再平衡日之前的 Pad 留 NaN→False，避免 bool(NaN)=True 误买入
     n = len(dates)
     monthly = annual_budget / 12.0
     is_buy = reb_df['signal'].isin(_BUY_SET).fillna(False).to_numpy()
-    is_buffett = np.asarray(reb_df['buffett'].tolist(), dtype=bool) if 'buffett' in reb_df else None
+    is_buffett = np.asarray(reb_df['buffett'].fillna(False).tolist(), dtype=bool) if 'buffett' in reb_df else None
     pe = reb_df['pe'].to_numpy()
     dy = reb_df['dy'].to_numpy()
     rf = np.asarray(rf_yield, dtype=float) if rf_yield is not None else None
@@ -266,7 +273,7 @@ def _percentiles_at(ser10, cur_pe, cur_dy, cur_pr, cfg):
     return st_pe, st_dy, st_pr
 
 
-def _signal_at(t, ser, price, fin, div, bond, ind, industry_type, cfg, prev=None):
+def _signal_at(t, ser, price, fin, div, bond, ind, industry_type, cfg, prev=None, symbol=None):
     ser_at = ser[ser['date'] <= t]
     if ser_at.empty:
         return None
@@ -304,14 +311,14 @@ def _signal_at(t, ser, price, fin, div, bond, ind, industry_type, cfg, prev=None
     else:
         gordon_status = 'INSUFFICIENT'
     # 质量/陷阱
-    quality = qs.quality_score(fin, div, t, industry_type, ind.get('industry', ''), cfg)
+    quality = qs.quality_score(fin, div, t, industry_type, ind.get('industry', ''), cfg, symbol=symbol)
     vtres = vt.value_trap_score(quality, industry_type, cfg)
     metrics = {'pe_pct': st_pe.pct_10y, 'dy_pct': st_dy.pct_10y, 'pr_pct': st_pr.pct_10y,
-               'spread': spread, 'spread_threshold': thr_pct, 'pe_fair_ratio': ratio,
-               'gordon_status': gordon_status,
-               'quality_score': quality['score'], 'industry_score': quality['sub'].get('industry', 50)}
+                'spread': spread, 'spread_threshold': thr_pct, 'pe_fair_ratio': ratio,
+                'gordon_status': gordon_status,
+                'quality_score': quality['score'], 'industry_score': quality['sub'].get('industry', 50)}
     sig = signal_mod.compute_signal(metrics, quality, vtres, cfg, prev=prev)
-    return {
+    out = {
         'price': float(last['close']),
         'pe_pct': st_pe.pct_10y, 'dy_pct': st_dy.pct_10y, 'pr_pct': st_pr.pct_10y,
         'spread': spread, 'rf': rf, 'quality': quality['score'],
@@ -323,6 +330,24 @@ def _signal_at(t, ser, price, fin, div, bond, ind, industry_type, cfg, prev=None
         'rule_signal': sig['rule_signal'], 'final_signal': sig['final_signal'],
         'a': sig['condition_a'], 'b': sig['condition_b'], 'c': sig['condition_c'],
     }
+    # 巴菲特模式(银行业)专用字段：行业专用质量 + PB破净 + 分红连续性
+    bank_roe = bank_eqr = bank_pb = None
+    div_consec = (quality.get('detail', {}) or {}).get('dividend', {}).get('consecutive_years')
+    if bk.is_financial(industry_type):
+        _bk = (quality.get('detail', {}) or {}).get('banking', {}) or {}
+        bank_roe = _bk.get('roe')
+        bank_eqr = _bk.get('equity_ratio')
+        try:
+            _bv = bk.book_value_latest(fin, t, symbol=symbol)
+            if _bv and _bv.get('bvps'):
+                bank_pb = float(last['close']) / float(_bv['bvps'])
+        except Exception:
+            bank_pb = None
+    out['bank_roe'] = bank_roe
+    out['bank_eqr'] = bank_eqr
+    out['bank_pb'] = bank_pb
+    out['div_consec'] = div_consec
+    return out
 
 
 def fetch_benchmark(symbol: str, start: str, end: str) -> Optional[pd.DataFrame]:
@@ -387,7 +412,7 @@ def re_evaluate(symbol: str, start: str, end: str, mode: str = 'balanced',
     n = max(1, len(grid))
     prev_cond = None
     for i, t in enumerate(grid, 1):
-        r = _signal_at(t, ser, price, fin, div, bond, ind, industry_type, cfg, prev=prev_cond)
+        r = _signal_at(t, ser, price, fin, div, bond, ind, industry_type, cfg, prev=prev_cond, symbol=symbol)
         if r is None:
             continue
         prev_cond = {'a': r['a'], 'b': r['b'], 'c': r['c']}
@@ -427,6 +452,7 @@ def run_backtest(symbol: str, start: str, end: str = None, mode: str = 'balanced
         return {'ok': False, 'reason': '无足够数据'}
     _prog(0.88, '模拟策略收益并对比基准…')
     dp = DataProvider()
+    ip = IndustryDataProvider()
     price = dp.get_price(symbol, start=(pd.to_datetime(start) - pd.Timedelta(days=400)).strftime('%Y%m%d'),
                          end=(pd.to_datetime(end)).strftime('%Y%m%d'))
     px = price.copy()
@@ -490,23 +516,35 @@ def run_backtest(symbol: str, start: str, end: str = None, mode: str = 'balanced
     reb_signal = df['final_signal'].astype(str).tolist()
     reb_pe = df['pe_pct'].astype(float).tolist() if 'pe_pct' in df.columns else [np.nan] * len(df)
     reb_dy = df['dy_pct'].astype(float).tolist() if 'dy_pct' in df.columns else [np.nan] * len(df)
-    # 巴菲特模式触发：质量高 + 非价值陷阱 + 价格便宜(留安全边际)。
-    # "便宜"判定须鲁棒：Gordon 可信(VALID)且价≤合理价×0.8 时用 Gordon；否则(A股高股息股多为
-    # THIN_SPREAD，Gordon分母极小、合理PE失真)退回历史估值分位(PE分位≤30% 或 股息率分位≥70%)，
-    # 绝不拿失真的 Gordon 充当安全边际。
-    q = pd.to_numeric(df.get('quality'), errors='coerce') if 'quality' in df.columns else pd.Series([np.nan] * len(df))
-    vt = pd.to_numeric(df.get('vt_score'), errors='coerce') if 'vt_score' in df.columns else pd.Series([np.nan] * len(df))
-    fr = pd.to_numeric(df.get('pe_fair_ratio'), errors='coerce') if 'pe_fair_ratio' in df.columns else pd.Series([np.nan] * len(df))
-    gs = df.get('gordon_status') if 'gordon_status' in df.columns else pd.Series([''] * len(df))
-    pe_pct = pd.to_numeric(df.get('pe_pct'), errors='coerce') if 'pe_pct' in df.columns else pd.Series([np.nan] * len(df))
-    dy_pct = pd.to_numeric(df.get('dy_pct'), errors='coerce') if 'dy_pct' in df.columns else pd.Series([np.nan] * len(df))
-    gordon_cheap = (gs.astype(str) == 'VALID') & fr.notna() & (fr <= _BUFFETT_FAIR_RATIO_MAX)
-    pct_cheap = (pe_pct <= _BUFFETT_PE_PCT_MAX) | (dy_pct >= _BUFFETT_DY_PCT_MIN)
-    reb_buffett = (
-        (q >= _BUFFETT_QUALITY_MIN) &
-        (vt <= _BUFFETT_VTSCORE_MAX) &
-        (gordon_cheap | pct_cheap)
-    ).fillna(False).astype(bool).tolist()
+    # 巴菲特模式触发（仅银行业，能力圈限定）：行业专用质量门槛 + PB破净/历史分位便宜 + 非陷阱。
+    _industry_type = ip.get_industry(symbol).get('industry_type', '制造业')
+    buffett_supported = _industry_type in _BUFFETT_SUPPORTED
+    if not buffett_supported:
+        # 非银行业：不支持巴菲特模式，回测中不建仓（曲线=闲置现金），仅提示"暂未支持该行业"
+        reb_buffett = [False] * len(df)
+        _buffett_note = '巴菲特模式暂未支持该行业（当前仅支持银行业）；本回测巴菲特曲线为空仓(无建仓)。'
+    else:
+        q = pd.to_numeric(df.get('quality'), errors='coerce') if 'quality' in df.columns else pd.Series([np.nan] * len(df))
+        vt_s = pd.to_numeric(df.get('vt_score'), errors='coerce') if 'vt_score' in df.columns else pd.Series([np.nan] * len(df))
+        roe = pd.to_numeric(df.get('bank_roe'), errors='coerce') if 'bank_roe' in df.columns else pd.Series([np.nan] * len(df))
+        eqr = pd.to_numeric(df.get('bank_eqr'), errors='coerce') if 'bank_eqr' in df.columns else pd.Series([np.nan] * len(df))
+        pb = pd.to_numeric(df.get('bank_pb'), errors='coerce') if 'bank_pb' in df.columns else pd.Series([np.nan] * len(df))
+        divc = pd.to_numeric(df.get('div_consec'), errors='coerce') if 'div_consec' in df.columns else pd.Series([np.nan] * len(df))
+        pe_pct = pd.to_numeric(df.get('pe_pct'), errors='coerce') if 'pe_pct' in df.columns else pd.Series([np.nan] * len(df))
+        dy_pct = pd.to_numeric(df.get('dy_pct'), errors='coerce') if 'dy_pct' in df.columns else pd.Series([np.nan] * len(df))
+        # 便宜：有 PB 用破净(PB≤1.0)；否则退回历史估值分位(PE分位≤30% 或 股息率分位≥70%)
+        pb_cheap = pb.notna() & (pb > 0) & (pb <= _BUFFETT_BANK_PB_CHEAP)
+        pct_cheap = (pe_pct <= _BUFFETT_PE_PCT_MAX) | (dy_pct >= _BUFFETT_DY_PCT_MIN)
+        cheap = pb_cheap | pct_cheap
+        reb_buffett = (
+            (q >= _BUFFETT_QUALITY_MIN) &
+            (vt_s <= _BUFFETT_VTSCORE_MAX) &
+            (roe.notna()) & (roe * 100.0 >= _BUFFETT_BANK_ROE_MIN) &
+            (eqr.notna()) & (eqr >= _BUFFETT_BANK_EQUITY_MIN) &
+            (divc.notna()) & (divc >= _BUFFETT_BANK_DIV_CONSEC) &
+            cheap.fillna(False)
+        ).fillna(False).astype(bool).tolist()
+        _buffett_note = None
     cap = simulate_capital_modes(price_daily, dates_cap, reb_dates, reb_signal,
                                  reb_pe, reb_dy, annual_budget,
                                  rf_yield=(rf_series.reindex(dates_cap, method='ffill').bfill()
@@ -543,6 +581,8 @@ def run_backtest(symbol: str, start: str, end: str = None, mode: str = 'balanced
         'avg_score': round(float(df['score'].mean()), 1) if 'score' in df else None,
         'modes': modes_metrics,
         'trades': {k: cap[k]['trades'] for k in cap},
+        'buffett_supported': buffett_supported,
+        'industry_type': _industry_type,
         'notes': [
             ('只买不卖模式(allow_sell=false)：模型仅用于判断买点，权重只增不减，卖出信号仅阻止新增买入。'
              if not bt_cfg.get('allow_sell', True) else
@@ -586,5 +626,7 @@ def run_backtest(symbol: str, start: str, end: str = None, mode: str = 'balanced
         bm_ret = bench_ret.reindex(full_ret.index).ffill().fillna(0.0)
         bench_equity = (1 + bm_ret).cumprod()
         res['benchmark_metrics'] = perf_metrics(bench_equity)
+    if _buffett_note:
+        res['notes'].append(_buffett_note)
     _prog(1.0, '回测完成')
     return res

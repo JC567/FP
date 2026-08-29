@@ -11,11 +11,11 @@ from valresearch.fundamental.industry import industry_score
 from valresearch.fundamental.banking import is_financial, banking_quality  # P1-2
 
 
-def quality_score(fin, div, t, industry_type='制造业', industry='', cfg=None) -> dict:
+def quality_score(fin, div, t, industry_type='制造业', industry='', cfg=None, symbol=None) -> dict:
     cfg = cfg or get_config('balanced')
     if is_financial(industry_type):
         # P1-2: 金融行业用专用模型（ROE/权益比率/盈利稳定性/分红持续性）
-        bk = banking_quality(fin, div, t, industry_type, cfg)
+        bk = banking_quality(fin, div, t, industry_type, cfg, symbol=symbol)
         ind = industry_score(industry_type, industry, cfg)
         score = round(0.85 * bk['score'] + 0.15 * ind['score'], 1)
         return {

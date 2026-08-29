@@ -197,6 +197,8 @@ class AnalysisReport:
     name: str = ''
     analysis_date: str = ''
     mode: str = 'balanced'
+    industry: str = ''          # 行业名称（如 '银行'）
+    industry_type: str = ''     # 行业大类（如 '银行'/'制造业'），巴菲特模式据此限定能力圈
     valuation: Dict[str, Any] = field(default_factory=dict)
     fundamental: Dict[str, Any] = field(default_factory=dict)
     value_trap: Dict[str, Any] = field(default_factory=dict)

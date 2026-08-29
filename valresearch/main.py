@@ -22,6 +22,7 @@ import importlib
 gg = importlib.import_module('valresearch.valuation.gordon')
 qs = importlib.import_module('valresearch.fundamental.quality_score')
 vt = importlib.import_module('valresearch.risk.value_trap')
+bk = importlib.import_module('valresearch.fundamental.banking')   # 银行专用质量/市净率
 from valresearch.valuation.price_range import (buy_range, current_zone, hist_price_map,
                                                price_methods, unify_price, risk_adjust_price)  # P1-3
 from valresearch.signal import compute_signal
@@ -54,7 +55,7 @@ def analyze(symbol: str, analysis_date: Optional[str] = None,
     if analysis_date is None:
         analysis_date = datetime.date.today().isoformat()
     rep = AnalysisReport(symbol=symbol, name=name or symbol,
-                         analysis_date=analysis_date, mode=cfg.get('mode', mode))
+                          analysis_date=analysis_date, mode=cfg.get('mode', mode))
 
     # 1. 取数
     _prog(0.05, '正在获取行情/PE/财报/分红/国债/行业数据…')
@@ -67,6 +68,8 @@ def analyze(symbol: str, analysis_date: Optional[str] = None,
     bond = mp.get_bond_yield()
     ind = ip.get_industry(symbol, name)
     industry_type = ind.get('industry_type', '制造业')
+    rep.industry = ind.get('industry', '')
+    rep.industry_type = industry_type
     rep.data_limitations.append('行业识别来源=' + ind.get('source', ''))
     if ind.get('source') == 'keyword-inference':
         rep.data_limitations.append('行业为关键词推断(启发式)，可配置覆盖')
@@ -174,7 +177,7 @@ def analyze(symbol: str, analysis_date: Optional[str] = None,
 
     # 7. 基本面质量 + 价值陷阱
     _prog(0.70, '计算基本面质量与价值陷阱…')
-    quality = qs.quality_score(fin, div, t, industry_type, ind.get('industry', ''), cfg)
+    quality = qs.quality_score(fin, div, t, industry_type, ind.get('industry', ''), cfg, symbol=symbol)
     vtres = vt.value_trap_score(quality, industry_type, cfg)
     _prog(0.80, '质量与陷阱评分完成')
 
@@ -236,9 +239,19 @@ def analyze(symbol: str, analysis_date: Optional[str] = None,
     pos = position_plan(sig['final_signal'], vtres, cfg)
 
     # 11. 组装
+    # 银行专用：市净率 PB（破净=便宜代理），仅金融业计算；字段缺失则 None
+    pb = None
+    if bk.is_financial(industry_type):
+        try:
+            _bv = bk.book_value_latest(fin, t, symbol=symbol)
+            if _bv is not None and _bv.get('bvps') is not None and cur_price is not None:
+                pb = round(float(cur_price) / float(_bv['bvps']), 3)
+        except Exception:
+            pb = None
     rep.valuation = {
         'date': str(series['date'].iloc[-1].date()),
         'price': round(float(cur_price), 2) if cur_price is not None else None,
+        'pb': pb,
         'eps_ttm': round(float(cur_eps), 3) if cur_eps is not None else None,
         'dps_ttm': round(float(cur_dps), 3) if cur_dps is not None else None,
         'pe_ttm': round(float(cur_pe), 2) if cur_pe is not None else None,

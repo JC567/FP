@@ -21,7 +21,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 import akshare as ak
 
-import sys, os
+import sys, os, json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import stock_db as db
 
@@ -336,11 +336,65 @@ class MacroDataProvider:
 
 class IndustryDataProvider:
     """行业/行业类型：优先东财 stock_individual_info_em(可得时)，否则按名称关键词推断，可配置覆盖。
-    行业风险评分(0-100)为主观配置，不在此伪造。"""
-    _BANK = ('银行', '招商银行', '工商银行', '建设银行', '农业银行', '中国银行', '交通银行', '邮储', '兴业', '浦发', '民生', '中信银行', '光大银行', '华夏银行', '平安银行')
+    行业风险评分(0-100)为主观配置，不在此伪造。
+
+    名称解析：东财接口在单位网络常被阻断，故名称优先用新浪全量快照(本地缓存)解析，保证
+    行业(尤其银行)识别稳定可用。巴菲特模式依赖 industry_type 判定能力圈，必须可靠。
+    """
+    _BANK = ('银行', '招商银行', '工商银行', '建设银行', '农业银行', '中国银行', '交通银行', '邮储', '兴业', '浦发', '民生', '中信银行', '光大银行', '华夏银行', '平安银行', '北京银行', '江苏银行', '上海银行', '宁波银行', '南京银行', '杭州银行')
     _INSUR = ('保险', '中国人寿', '中国平安', '新华保险', '中国太保', '中国人保', '天茂')
     _SEC = ('证券', '券商', '中信证券', '国泰', '海通', '华泰', '招商证券', '广发', '东方证券', '申万', '银河', '中金')
     _REAL = ('地产', '万科', '保利', '招商蛇口', '金地', '华侨城', '新城', '华夏幸福')
+    # 常见银行代码快速命中（名称解析失败时的兜底），务必仅为银行
+    _BANK_CODES = {
+        '601398', '601288', '601939', '601988', '601328', '601658',  # 国有六大行
+        '600036', '600000', '600016', '600015', '601166', '601998',  # 股份制
+        '000001', '601818', '601229', '600919', '601169', '600926',
+        '601009', '002142', '600908', '601128', '601077', '601577',
+        '600928', '601860', '601825', '601187', '002948', '002839',
+        '002807', '601528', '002936', '601916', '601665', '603323',
+    }
+
+    _NAME_CACHE = {}
+    _NAME_CACHE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                    'data', 'stock_names.json')
+
+    def _load_name_cache(self):
+        if self._NAME_CACHE:
+            return
+        try:
+            if os.path.exists(self._NAME_CACHE_PATH):
+                with open(self._NAME_CACHE_PATH, 'r', encoding='utf-8') as f:
+                    d = json.load(f)
+                self._NAME_CACHE = d.get('names', {})
+        except Exception:
+            self._NAME_CACHE = {}
+
+    def _save_name_cache(self):
+        try:
+            os.makedirs(os.path.dirname(self._NAME_CACHE_PATH), exist_ok=True)
+            with open(self._NAME_CACHE_PATH, 'w', encoding='utf-8') as f:
+                json.dump({'names': self._NAME_CACHE}, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+    def get_stock_name(self, symbol: str) -> str:
+        """返回股票名称：新浪全量快照(本地缓存)，失败返回 ''。"""
+        self._load_name_cache()
+        if symbol in self._NAME_CACHE:
+            return self._NAME_CACHE[symbol]
+        try:
+            with _AK_LOCK:
+                df = _retry(ak.stock_zh_a_spot)
+            if df is not None and not df.empty:
+                for _, r in df.iterrows():
+                    code = str(r.get('代码', ''))
+                    bare = code[2:] if code[:2] in ('sh', 'sz') else code
+                    self._NAME_CACHE[bare] = str(r.get('名称', ''))
+                self._save_name_cache()
+        except Exception:
+            pass
+        return self._NAME_CACHE.get(symbol, '')
 
     def get_industry(self, symbol: str, name: str = '') -> Dict:
         info = {'industry': '', 'industry_type': '制造业', 'source': 'keyword-inference'}
@@ -355,8 +409,15 @@ class IndustryDataProvider:
                     info['source'] = 'east'
         except Exception:
             pass
-        probe = (info.get('industry', '') + name)
-        if any(k in probe for k in self._BANK):
+        # 名称解析（优先传入 name，否则新浪缓存/全量解析）
+        nm = (name or '').strip()
+        if not nm:
+            try:
+                nm = self.get_stock_name(symbol)
+            except Exception:
+                nm = ''
+        probe = (info.get('industry', '') + ' ' + nm)
+        if symbol in self._BANK_CODES or any(k in probe for k in self._BANK):
             info['industry_type'] = '银行'
         elif any(k in probe for k in self._INSUR):
             info['industry_type'] = '保险'
@@ -366,6 +427,8 @@ class IndustryDataProvider:
             info['industry_type'] = '地产'
         else:
             info['industry_type'] = '制造业'
+        if nm and info['source'] != 'east':
+            info['source'] = 'name-inference'
         return info
 
 
