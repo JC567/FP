@@ -14,8 +14,19 @@
   · 便宜(安全边际)——银行业估值核心看 PB（市净率），而非 PE：
       - 有 PB 时：PB ≤ 1.0（破净）= 明确便宜（价格不高于账面值，留安全边际）
       - 无 PB 时：退回 PE分位≤30% 或 股息率分位≥70%（历史估值分位口径）
-  · 不满足任一质量门槛 → 不适合（只说明原因，不给出买入建议）。
+   · 不满足任一质量门槛 → 不适合（只说明原因，不给出买入建议）。
 Gordon/PE合理性 等通用口径不再作为银行业便宜判定（银行高杠杆下 PE 易失真）。
+
+分批买入规则（仅用于回测；单股分析见"建议"文字说明）：
+  · 每月最多一次买入（按再平衡信号触发），均"分批、不一次性、只买不卖"。
+  · 累积区（普通买点）：满足"优质+便宜+非陷阱"但仅达便宜阈值
+        —— PB ≤ 1.0（破净）或（PE分位 ≤ 30% 且 股息率分位 ≥ 70%），
+        每月买入额度 = 年度预算 / 12（常规档）。
+  · 强烈买入区（强买点）：安全边际更深
+        —— PB ≤ 0.85（深度破净）或（PE分位 ≤ 15% 且 股息率分位 ≥ 85%），
+        每月买入额度 = 常规档 × 2（强买档，约两倍），仍受可用现金上限约束。
+  · 效果：低估越深（强买点）在年内更早、更大比例建仓；普通买点匀速累积；
+        两者差异仅在"每月额度大小"，不改变"分批、不一次性、只买不卖"原则。
 """
 from __future__ import annotations
 
@@ -33,10 +44,16 @@ _BANK_MAX_DECLINES = 2      # 盈利连续下滑年数上限
 _BANK_MIN_DD = -40.0        # 净利最大回撤下限(%)（不低于 -40%）
 
 # 银行业便宜判定
-_BANK_PB_CHEAP = 1.0        # PB ≤ 1.0（破净）视为便宜
+_BANK_PB_CHEAP = 1.0        # PB ≤ 1.0（破净）视为便宜（累积区阈值）
 _BANK_PB_FAIR = 1.5         # PB 合理中枢（仅用于提示安全边际，非精确内在价值）
-_BUFFETT_PE_PCT_MAX = 30.0  # 无 PB 时：PE 分位 ≤ 30% 视为低估
-_BUFFETT_DY_PCT_MIN = 70.0  # 无 PB 时：股息率分位 ≥ 70% 视为高股息
+_BUFFETT_PE_PCT_MAX = 30.0  # 无 PB 时：PE 分位 ≤ 30% 视为低估（累积区阈值）
+_BUFFETT_DY_PCT_MIN = 70.0  # 无 PB 时：股息率分位 ≥ 70% 视为高股息（累积区阈值）
+
+# 银行业"强烈买入区"阈值（安全边际更深，强买档）：强买 ⊂ 便宜，二者不可矛盾
+_BANK_PB_STRONG = 0.85      # PB ≤ 0.85（深度破净）视为强烈买入区
+_BUFFETT_PE_PCT_STRONG = 15.0   # 无 PB 时：PE 分位 ≤ 15% 视为强低估
+_BUFFETT_DY_PCT_STRONG = 85.0   # 无 PB 时：股息率分位 ≥ 85% 视为强高股息
+_BUFFETT_STRONG_MULT = 2.0  # 强买档每月额度 = 常规档 × 此倍数（回测用）
 
 
 def _g(d, *keys, default=None):
@@ -44,6 +61,29 @@ def _g(d, *keys, default=None):
         if isinstance(d, dict) and k in d and d[k] is not None:
             return d[k]
     return default
+
+
+def buffett_cheap(pb, pe_pct, dy_pct) -> dict:
+    """判断便宜与档位。返回 {'cheap': bool, 'strong': bool, 'method': str}。
+
+    强买 ⊂ 便宜（强买阈值严格窄于便宜阈值），保证强买点一定是买点。
+    """
+    if pb is not None and pb > 0:
+        cheap = pb <= _BANK_PB_CHEAP
+        strong = pb <= _BANK_PB_STRONG
+        if cheap:
+            method = 'PB(破净)'
+        elif strong:
+            method = 'PB(深度破净)'   # strong 但理论不可能（0.85<1.0），兜底
+        else:
+            method = 'PB'
+    else:
+        cheap = ((pe_pct is not None and pe_pct <= _BUFFETT_PE_PCT_MAX) or
+                 (dy_pct is not None and dy_pct >= _BUFFETT_DY_PCT_MIN))
+        strong = ((pe_pct is not None and pe_pct <= _BUFFETT_PE_PCT_STRONG) or
+                  (dy_pct is not None and dy_pct >= _BUFFETT_DY_PCT_STRONG))
+        method = '历史估值分位(PE/股息率)'
+    return {'cheap': bool(cheap), 'strong': bool(strong), 'method': method}
 
 
 def buffett_assess(rep) -> dict:
@@ -117,36 +157,36 @@ def buffett_assess(rep) -> dict:
     else:
         fails.append(f'价值陷阱分 {vt_score:.0f} > {_BANK_VT_MAX:.0f} 或等级 HIGH：疑似价值陷阱')
 
-    # —— 便宜判定（银行业看 PB，无 PB 退回历史分位）——
-    if pb is not None and pb > 0:
-        cheap = pb <= _BANK_PB_CHEAP
-        method = 'PB(破净)'
-        if cheap:
-            reasons.append(f'PB={pb:.2f} ≤ {_BANK_PB_CHEAP:.1f}（破净）：价格不高于账面值，留安全边际')
+    # —— 便宜判定（银行业看 PB，无 PB 退回历史分位）；区分"强烈买入区 / 累积区"两档 ——
+    cc = buffett_cheap(pb, pe_pct, dy_pct)
+    cheap = cc['cheap']; strong = cc['strong']; method = cc['method']
+    if cheap:
+        if pb is not None and pb > 0:
+            if strong:
+                reasons.append(f'PB={pb:.2f} ≤ {_BANK_PB_STRONG:.2f}（深度破净）：强烈买入区，安全边际极宽')
+            else:
+                reasons.append(f'PB={pb:.2f} ≤ {_BANK_PB_CHEAP:.1f}（破净）：便宜，进入累积区')
         else:
-            fails.append(f'PB={pb:.2f} > {_BANK_PB_CHEAP:.1f}：未破净，银行业视角下便宜度不足')
-        margin_of_safety = max(0.0, (_BANK_PB_FAIR - pb) / _BANK_PB_FAIR) if pb < _BANK_PB_FAIR else None
-    else:
-        cheap = ((pe_pct is not None and pe_pct <= _BUFFETT_PE_PCT_MAX) or
-                 (dy_pct is not None and dy_pct >= _BUFFETT_DY_PCT_MIN))
-        method = '历史估值分位(PE/股息率)'
-        if cheap:
             bits = []
             if pe_pct is not None and pe_pct <= _BUFFETT_PE_PCT_MAX:
                 bits.append(f'PE分位={pe_pct:.0f}%≤{_BUFFETT_PE_PCT_MAX:.0f}%')
             if dy_pct is not None and dy_pct >= _BUFFETT_DY_PCT_MIN:
                 bits.append(f'股息率分位={dy_pct:.0f}%≥{_BUFFETT_DY_PCT_MIN:.0f}%')
-            reasons.append('PB 不可得，退回历史估值分位判定便宜：' + ' 且 '.join(bits))
-        else:
-            bits = []
-            if pe_pct is not None:
-                bits.append(f'PE分位={pe_pct:.0f}%')
-            if dy_pct is not None:
-                bits.append(f'股息率分位={dy_pct:.0f}%')
-            fails.append('PB 不可得且历史估值分位未达低估（' + '，'.join(bits) + '）：价格不够便宜')
-        margin_of_safety = None
+            if strong:
+                reasons.append('强低估（' + ' 且 '.join(bits) + ' 达强买阈值）：强烈买入区')
+            else:
+                reasons.append('PB 不可得，退回历史估值分位判定便宜：' + ' 且 '.join(bits))
+    else:
+        bits = []
+        if pe_pct is not None:
+            bits.append(f'PE分位={pe_pct:.0f}%')
+        if dy_pct is not None:
+            bits.append(f'股息率分位={dy_pct:.0f}%')
+        fails.append('价格不够便宜（' + '，'.join(bits) + '）：未达银行业便宜阈值')
+    margin_of_safety = max(0.0, (_BANK_PB_FAIR - pb) / _BANK_PB_FAIR) if (pb is not None and 0 < pb < _BANK_PB_FAIR) else None
 
     suitable = (len(fails) == 0)
+    cheap_tier = ('strong' if strong else 'accumulate') if (cheap and suitable) else None
     return {
         'supported': True,
         'industry_type': industry_type,
@@ -154,6 +194,8 @@ def buffett_assess(rep) -> dict:
         'reasons': reasons,
         'fails': fails,
         'method': method,
+        'strong': strong,
+        'cheap_tier': cheap_tier,
         'margin_of_safety': (round(margin_of_safety, 3) if margin_of_safety is not None else None),
         # 透传关键数据供展示
         'roe': roe, 'equity_ratio': eqr, 'div_consec': div_consec,
@@ -197,9 +239,17 @@ def format_buffett_report(rep) -> str:
         L.append(f'结论：✔ 适合巴菲特模式（满足"优质+便宜+安全边际+非陷阱"）')
         L.append(f'  便宜判定方法：{a["method"]}'
                  + (f'；安全边际≈{a["margin_of_safety"]*100:.0f}%' if a['margin_of_safety'] is not None else ''))
+        tier_txt = {'strong': '强烈买入区（深度低估，加大每月额度）',
+                    'accumulate': '累积区（按月定额分批）'}.get(a.get('cheap_tier'))
+        if tier_txt:
+            L.append(f'  买点档位：{tier_txt}')
         L.append('')
         L.append('【建议】')
-        L.append('  · 建仓：分批买入（如每月定额），切勿一次追高；低估区间持续累积。')
+        if a.get('cheap_tier') == 'strong':
+            L.append('  · 建仓：当前处"强烈买入区"，分批买入且每月额度上调至常规档×2（仍分批、不一次性），')
+            L.append('    深度低估时更快建仓；当月额度不足则受可用现金上限约束。')
+        else:
+            L.append('  · 建仓：当前处"累积区"，按月定额分批买入（如每月定额），不一次性追高；低估区间持续累积。')
         L.append('  · 持有：长期持有(forever)，不轻易卖出；以"好生意+好价格"为前提陪伴企业成长。')
         L.append('  · 注：本结论由"银行业专用模型"得出（ROE/资本充足/分红连续性/PB破净），非通用质量分。')
         L.append('  · 仅在"质量恶化(ROE下滑/资本转薄)/落入价值陷阱"时重新评估，不因短期波动卖出。')

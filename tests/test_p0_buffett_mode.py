@@ -168,6 +168,53 @@ def test_buffett_backtest_supported_bank():
     assert res.get('buffett_supported') is True
 
 
+def test_buffett_cheap_strong_subset():
+    """强买 ⊂ 便宜：强买阈值严格窄于便宜阈值，强买点一定是买点。"""
+    from valresearch.report.buffett import buffett_cheap
+    # PB 深度破净 → 强买且便宜
+    c = buffett_cheap(0.80, 20.0, 60.0); assert c['strong'] and c['cheap']
+    # PB 刚破净(0.9) → 便宜但非强买
+    c = buffett_cheap(0.90, 20.0, 60.0); assert (not c['strong']) and c['cheap']
+    # PB 高于 1.0 → 都不便宜
+    c = buffett_cheap(1.20, 20.0, 60.0); assert (not c['strong']) and (not c['cheap'])
+    # 无 PB：PE分位 10%(≤15) → 强买且便宜
+    c = buffett_cheap(None, 10.0, 60.0); assert c['strong'] and c['cheap']
+    # 无 PB：PE分位 25%(≤30 但 >15) → 便宜非强买
+    c = buffett_cheap(None, 25.0, 60.0); assert (not c['strong']) and c['cheap']
+    print('test_buffett_cheap_strong_subset OK')
+
+
+def test_buffett_backtest_strong_vs_accumulate():
+    """强买档每月额度 = 常规档×2；累积区 = 常规档。均分批、不一次性。"""
+    from valresearch.backtest.engine import simulate_capital_modes
+    import pandas as pd, numpy as np
+    annual = 12_000_000.0          # 常规档 monthly = 1,000,000；强买档 = 2,000,000
+    monthly = annual / 12.0
+    end = pd.Timestamp('2021-12-01')
+    idx = pd.date_range('2020-01-01', end, freq='D')
+    price = pd.Series(10.0, index=idx)
+    # 回测再平衡日 = 每月 1 号（便于强买信号落在买入日）
+    reb_dates = [d.strftime('%Y-%m-%d') for d in pd.date_range('2020-01-01', '2021-12-01', freq='MS')]
+    rb = [True] * len(reb_dates)                 # 全年都是买点
+    rbs = [True] + [False] * (len(reb_dates) - 1)  # 仅首月为强烈买入区
+    cap = simulate_capital_modes(price, idx, reb_dates,
+                                 ['WAIT'] * len(reb_dates),
+                                 [30.0] * len(reb_dates), [50.0] * len(reb_dates),
+                                 annual, reb_buffett=rb, reb_buffett_strong=rbs,
+                                 buffett_strong_mult=2.0)
+    tr = cap['buffett']['trades']
+    strong = [t for t in tr if t.get('tier') == 'strong']
+    acc = [t for t in tr if t.get('tier') == 'accumulate']
+    assert strong and acc, '应同时存在强买档与累积档交易'
+    # 首月强买档：约 2×常规档；其余累积档：约常规档
+    assert abs(strong[0]['amount'] - 2 * monthly) < 1.0, strong[0]['amount']
+    assert abs(acc[0]['amount'] - monthly) < 1.0, acc[0]['amount']
+    # 强买档单笔 > 累积档单笔
+    assert strong[0]['amount'] > acc[0]['amount']
+    print('test_buffett_backtest_strong_vs_accumulate OK strong=%.0f acc=%.0f'
+          % (strong[0]['amount'], acc[0]['amount']))
+
+
 if __name__ == '__main__':
     test_buffett_unsupported_industry()
     test_buffett_banking_suitable()
@@ -177,7 +224,9 @@ if __name__ == '__main__':
     test_buffett_banking_unsuitable_trap()
     test_buffett_banking_unsuitable_cheap()
     test_buffett_banking_cheap_fallback_percentile()
+    test_buffett_cheap_strong_subset()
     test_buffett_integration_600036()
     test_buffett_backtest_unsupported_nonbank()
     test_buffett_backtest_supported_bank()
+    test_buffett_backtest_strong_vs_accumulate()
     print('== 巴菲特模式(银行业专用) 全部通过 ==')

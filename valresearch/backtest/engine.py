@@ -24,6 +24,7 @@ gg = importlib.import_module('valresearch.valuation.gordon')
 qs = importlib.import_module('valresearch.fundamental.quality_score')
 vt = importlib.import_module('valresearch.risk.value_trap')
 bk = importlib.import_module('valresearch.fundamental.banking')   # 银行专用质量/市净率
+buffett_mod = importlib.import_module('valresearch.report.buffett')  # 巴菲特(银行业)便宜档位阈值
 signal_mod = importlib.import_module('valresearch.signal.engine')
 position_mod = importlib.import_module('valresearch.signal.position')
 
@@ -88,10 +89,12 @@ _BUFFETT_BANK_PB_CHEAP = 1.0    # 银行 PB ≤ 1.0（破净）视为便宜
 _BUFFETT_PE_PCT_MAX = 30.0      # 无 PB 时：历史 PE 分位 ≤ 30% 视为"低估"
 _BUFFETT_DY_PCT_MIN = 70.0      # 无 PB 时：历史股息率分位 ≥ 70% 视为"高股息"
 _BUFFETT_SUPPORTED = ('银行',)  # 仅支持银行业
+_BUFFETT_STRONG_MULT = 2.0     # 强买档每月额度 = 常规档(年度/12) × 此倍数（与 buffett._BUFFETT_STRONG_MULT 一致）
 
 
 def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_dy,
-                           annual_budget=500000.0, rf_yield=None, reb_buffett=None):
+                            annual_budget=500000.0, rf_yield=None, reb_buffett=None,
+                            reb_buffett_strong=None, buffett_strong_mult=2.0):
     """资本预算回测：每年注入 annual_budget，比较四种建仓模式（价格用 px_price，含分红再投则用后复权）。
 
     返回 {mode: {'value': Series(每日资产=持股*价+现金), 'invested': 累计投入,
@@ -102,8 +105,10 @@ def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_d
                           当年无买点则现金自然留存到下一年（预算每年照常注入）。
       · smart     智能定投：每月定投基数 annual_budget/12，按估值分位动态调节当月金额
                           (便宜多买、贵了少买)：cheap=(股息率分位-PE分位)/100，倍数=clamp(1+cheap,0.5,2.0)。
-      · buffett   巴菲特模式：仅在" quality高(护城河扎实) + Gordon合理PE留安全边际(价≤合理价×0.8)
-                  + 非价值陷阱 "同时成立时建仓，且低估区分批（每月额度）买入、永不卖出(持有 forever)；
+       · buffett   巴菲特模式：仅在" quality高(护城河扎实) + 银行业PB破净(或历史分位低估)
+                   + 非价值陷阱 "同时成立时建仓，且低估区分批（每月额度）买入、永不卖出(持有 forever)；
+                   买点分两档：强烈买入区(深度破净/极低估)每月额度 = 常规档×buffett_strong_mult(默认2)，
+                   累积区(刚破净/边际低估)每月额度 = 常规档；两者均分批、不一次性、受可用现金上限约束。
                   不满足条件则现金留存（吃国债利息）到下个机会。
     现金每年初注入 annual_budget；分红已含于后复权价，不再单独处理。
     闲置现金每日按 10Y 国债收益率(rf_yield, 年化%、与 dates 对齐) 复利计息（自动"买国债"），
@@ -114,13 +119,18 @@ def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_d
                           index=pd.to_datetime(list(reb_dates)))
     if reb_buffett is not None:
         reb_df['buffett'] = pd.Series(list(reb_buffett), index=reb_df.index, dtype=bool)
+    if reb_buffett_strong is not None:
+        reb_df['buffett_strong'] = pd.Series(list(reb_buffett_strong), index=reb_df.index, dtype=bool)
     reb_df = reb_df.reindex(dates, method='pad')
     if 'buffett' in reb_df:
         reb_df['buffett'] = reb_df['buffett'].fillna(False)   # 首个再平衡日之前的 Pad 留 NaN→False，避免 bool(NaN)=True 误买入
+    if 'buffett_strong' in reb_df:
+        reb_df['buffett_strong'] = reb_df['buffett_strong'].fillna(False)
     n = len(dates)
     monthly = annual_budget / 12.0
     is_buy = reb_df['signal'].isin(_BUY_SET).fillna(False).to_numpy()
     is_buffett = np.asarray(reb_df['buffett'].fillna(False).tolist(), dtype=bool) if 'buffett' in reb_df else None
+    is_buffett_strong = np.asarray(reb_df['buffett_strong'].fillna(False).tolist(), dtype=bool) if 'buffett_strong' in reb_df else None
     pe = reb_df['pe'].to_numpy()
     dy = reb_df['dy'].to_numpy()
     rf = np.asarray(rf_yield, dtype=float) if rf_yield is not None else None
@@ -188,14 +198,18 @@ def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_d
             elif kind == 'buffett':
                 if last_month != d.month and is_buffett is not None and is_buffett[i] \
                         and cash > 0 and p and p > 0:
-                    amt = min(monthly, cash)   # 低估区分批：每月额度，连续低估则逐月买
+                    # 强烈买入区(深度破净/极低估)：每月额度上调至常规档×倍；否则常规档。均分批、不一次性。
+                    strong = is_buffett_strong is not None and is_buffett_strong[i]
+                    mult = buffett_strong_mult if strong else 1.0
+                    amt = min(monthly * mult, cash)
                     sh = amt / p
                     shares += sh
                     cash -= amt
                     invested += amt
                     trades.append({'date': str(d.date()), 'action': '买入',
                                    'price': round(float(p), 3), 'amount': round(amt, 2),
-                                   'shares': round(sh, 2), 'cash': round(cash, 2)})
+                                   'shares': round(sh, 2), 'cash': round(cash, 2),
+                                   'tier': ('strong' if strong else 'accumulate')})
                     last_month = d.month
             vals[i] = (shares * p if p == p else shares * 0.0) + cash
         return vals, invested, trades
@@ -533,23 +547,30 @@ def run_backtest(symbol: str, start: str, end: str = None, mode: str = 'balanced
         pe_pct = pd.to_numeric(df.get('pe_pct'), errors='coerce') if 'pe_pct' in df.columns else pd.Series([np.nan] * len(df))
         dy_pct = pd.to_numeric(df.get('dy_pct'), errors='coerce') if 'dy_pct' in df.columns else pd.Series([np.nan] * len(df))
         # 便宜：有 PB 用破净(PB≤1.0)；否则退回历史估值分位(PE分位≤30% 或 股息率分位≥70%)
+        # 强烈买入区(强买档)：深度破净(PB≤0.85) 或 极低估(PE分位≤15% 或 股息率分位≥85%)；强买 ⊂ 便宜
         pb_cheap = pb.notna() & (pb > 0) & (pb <= _BUFFETT_BANK_PB_CHEAP)
+        pb_strong = pb.notna() & (pb > 0) & (pb <= buffett_mod._BANK_PB_STRONG)
         pct_cheap = (pe_pct <= _BUFFETT_PE_PCT_MAX) | (dy_pct >= _BUFFETT_DY_PCT_MIN)
+        pct_strong = (pe_pct <= buffett_mod._BUFFETT_PE_PCT_STRONG) | (dy_pct >= buffett_mod._BUFFETT_DY_PCT_STRONG)
         cheap = pb_cheap | pct_cheap
-        reb_buffett = (
+        strong = pb_strong | pct_strong
+        _qmask = (
             (q >= _BUFFETT_QUALITY_MIN) &
             (vt_s <= _BUFFETT_VTSCORE_MAX) &
             (roe.notna()) & (roe * 100.0 >= _BUFFETT_BANK_ROE_MIN) &
             (eqr.notna()) & (eqr >= _BUFFETT_BANK_EQUITY_MIN) &
-            (divc.notna()) & (divc >= _BUFFETT_BANK_DIV_CONSEC) &
-            cheap.fillna(False)
-        ).fillna(False).astype(bool).tolist()
+            (divc.notna()) & (divc >= _BUFFETT_BANK_DIV_CONSEC)
+        )
+        reb_buffett = (_qmask & cheap.fillna(False)).fillna(False).astype(bool).tolist()
+        reb_buffett_strong = (_qmask & strong.fillna(False)).fillna(False).astype(bool).tolist()
         _buffett_note = None
     cap = simulate_capital_modes(price_daily, dates_cap, reb_dates, reb_signal,
                                  reb_pe, reb_dy, annual_budget,
                                  rf_yield=(rf_series.reindex(dates_cap, method='ffill').bfill()
                                            if rf_series is not None else None),
-                                 reb_buffett=reb_buffett)
+                                 reb_buffett=reb_buffett,
+                                 reb_buffett_strong=reb_buffett_strong,
+                                 buffett_strong_mult=_BUFFETT_STRONG_MULT)
 
     def _mode_metrics(m):
         s = m['value']
