@@ -536,6 +536,7 @@ def run_backtest(symbol: str, start: str, end: str = None, mode: str = 'balanced
     if not buffett_supported:
         # 非银行业：不支持巴菲特模式，回测中不建仓（曲线=闲置现金），仅提示"暂未支持该行业"
         reb_buffett = [False] * len(df)
+        reb_buffett_strong = [False] * len(df)
         _buffett_note = '巴菲特模式暂未支持该行业（当前仅支持银行业）；本回测巴菲特曲线为空仓(无建仓)。'
     else:
         q = pd.to_numeric(df.get('quality'), errors='coerce') if 'quality' in df.columns else pd.Series([np.nan] * len(df))
