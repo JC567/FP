@@ -125,12 +125,105 @@ def bank_equity_ratio_asof(fin, symbol: str, t):
     return float(eq) / float(ta)
 
 
+def _get_db_path():
+    from pathlib import Path
+    return Path(__file__).resolve().parents[2] / 'data' / 'annual_reports.db'
+
+
+def _get_standalone_equity_from_db(symbol: str, report_date: str) -> Optional[float]:
+    """从本地年报数据库读取母公司单独口径股东权益合计。"""
+    try:
+        import sqlite3
+        db_path = _get_db_path()
+        if not db_path.exists():
+            return None
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT metric_value FROM financial_data fd
+            JOIN annual_reports ar ON fd.report_id = ar.id
+            WHERE ar.symbol = ? AND fd.metric_name = '股东权益合计'
+            AND fd.period = ? AND fd.is_consolidated = 0
+        ''', (symbol, report_date))
+        row = cursor.fetchone()
+        conn.close()
+        if row and row[0] is not None:
+            return float(row[0])
+    except Exception:
+        pass
+    return None
+
+
+def _get_standalone_shares_from_db(symbol: str, report_date: str) -> Optional[float]:
+    """从本地年报数据库读取母公司单独口径股本。"""
+    try:
+        import sqlite3
+        db_path = _get_db_path()
+        if not db_path.exists():
+            return None
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT metric_value FROM financial_data fd
+            JOIN annual_reports ar ON fd.report_id = ar.id
+            WHERE ar.symbol = ? AND fd.metric_name = '股本'
+            AND fd.period = ? AND fd.is_consolidated = 0
+        ''', (symbol, report_date))
+        row = cursor.fetchone()
+        conn.close()
+        if row and row[0] is not None:
+            return float(row[0])
+    except Exception:
+        pass
+    return None
+
+
+def _get_latest_standalone_equity_from_db(symbol: str, asof_date: str) -> Optional[tuple]:
+    """从本地年报数据库读取截至 asof_date 的最新单独口径权益和股本。"""
+    try:
+        import sqlite3
+        db_path = _get_db_path()
+        if not db_path.exists():
+            return None
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        # 先查权益
+        cursor.execute('''
+            SELECT fd.metric_value, fd.period FROM financial_data fd
+            JOIN annual_reports ar ON fd.report_id = ar.id
+            WHERE ar.symbol = ? AND fd.metric_name = '股东权益合计'
+            AND fd.period <= ? AND fd.is_consolidated = 0
+            ORDER BY fd.period DESC LIMIT 1
+        ''', (symbol, asof_date))
+        eq_row = cursor.fetchone()
+        if not eq_row:
+            return None
+        eq = float(eq_row[0])
+        eq_period = eq_row[1]
+        # 再查同期股本
+        cursor.execute('''
+            SELECT metric_value FROM financial_data fd
+            JOIN annual_reports ar ON fd.report_id = ar.id
+            WHERE ar.symbol = ? AND fd.metric_name = '股本'
+            AND fd.period = ? AND fd.is_consolidated = 0
+        ''', (symbol, eq_period))
+        sh_row = cursor.fetchone()
+        conn.close()
+        if sh_row and sh_row[0] is not None:
+            return eq, float(sh_row[0]), eq_period
+        conn.close()
+    except Exception:
+        pass
+    return None
+
+
 def bank_book_asof(fin, symbol: str, t):
     """银行业每股净资产 = 归母权益 / 近似股本(归母净利/基本EPS)。
 
-    关键：权益必须与净利/股本同属一份年报（同报告期），否则 BVPS/PB 失真。
-    当 Sina 资产负债表有该年报期数据时直接取其归母权益（与年报同口径），
-    否则退回 bank_equity_asof（最新 PIT 兜底）。"""
+    关键：权益必须与净利/股本同属一份报告（同报告期），否则 BVPS/PB 失真。
+    优先：本地年报/半年报数据库的单独口径权益与股本（最准确，单独口径）；
+    次选：Sina 资产负债表按报告期匹配（合并口径，可能失真）；
+    兜底：bank_equity_asof（最新 PIT，合并口径，可能失真）。"""
     row = _last_annual(fin, t)
     if row is None:
         return None
@@ -141,17 +234,30 @@ def bank_book_asof(fin, symbol: str, t):
     shares = float(np_) / float(eps)
     if shares <= 0:
         return None
-    # 用年报自身的报告期(rptime)在 Sina 资产负债表中取同口径归母权益
-    rptime = str(row.get('report_period', '') or '')[:10]     # '2025-12-31'
-    eq = None
-    df = _sina_balance_sheet(symbol)
-    if df is not None and not df.empty and rptime:
-        rp_short = rptime.replace('-', '')[:8]                 # '20251231'
-        match = df[df['rp'] == rp_short]
-        if not match.empty:
-            eq = match.iloc[0]['eq']
+
+    # 1) 优先：本地年报/半年报数据库的单独口径权益与股本（最准确，单独口径）
+    # 获取截至 t 的最新单独口径权益和股本（含年报、半年报）
+    ts = pd.Timestamp(t).strftime('%Y-%m-%d')
+    latest = _get_latest_standalone_equity_from_db(symbol, ts)
+    if latest is not None:
+        eq, db_shares, eq_period = latest
+        if db_shares is not None and db_shares > 0:
+            shares = db_shares
+    else:
+        eq = None
+
+    # 2) 次选：Sina 资产负债表按年报期匹配（合并口径，可能失真）
     if eq is None:
-        # 兜底：取最新 PIT（合并口径，可能失真）
+        rptime = str(row.get('report_period', '') or '')[:10]
+        df = _sina_balance_sheet(symbol)
+        if df is not None and not df.empty and rptime:
+            rp_short = rptime.replace('-', '')[:8]
+            match = df[df['rp'] == rp_short]
+            if not match.empty:
+                eq = match.iloc[0]['eq']
+
+    # 3) 兜底：最新 PIT（合并口径，可能失真）
+    if eq is None:
         eq = bank_equity_asof(symbol, t)[2]
     if eq is None:
         return None
