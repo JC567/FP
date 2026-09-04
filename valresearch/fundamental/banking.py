@@ -126,10 +126,11 @@ def bank_equity_ratio_asof(fin, symbol: str, t):
 
 
 def bank_book_asof(fin, symbol: str, t):
-    """银行业每股净资产 = 归母权益 / 近似股本(归母净利/基本EPS)。返回 {book_equity,shares,bvps} 或 None。"""
-    eq = bank_equity_asof(symbol, t)[2]
-    if eq is None:
-        return None
+    """银行业每股净资产 = 归母权益 / 近似股本(归母净利/基本EPS)。
+
+    关键：权益必须与净利/股本同属一份年报（同报告期），否则 BVPS/PB 失真。
+    当 Sina 资产负债表有该年报期数据时直接取其归母权益（与年报同口径），
+    否则退回 bank_equity_asof（最新 PIT 兜底）。"""
     row = _last_annual(fin, t)
     if row is None:
         return None
@@ -139,6 +140,20 @@ def bank_book_asof(fin, symbol: str, t):
         return None
     shares = float(np_) / float(eps)
     if shares <= 0:
+        return None
+    # 用年报自身的报告期(rptime)在 Sina 资产负债表中取同口径归母权益
+    rptime = str(row.get('report_period', '') or '')[:10]     # '2025-12-31'
+    eq = None
+    df = _sina_balance_sheet(symbol)
+    if df is not None and not df.empty and rptime:
+        rp_short = rptime.replace('-', '')[:8]                 # '20251231'
+        match = df[df['rp'] == rp_short]
+        if not match.empty:
+            eq = match.iloc[0]['eq']
+    if eq is None:
+        # 兜底：取最新 PIT（合并口径，可能失真）
+        eq = bank_equity_asof(symbol, t)[2]
+    if eq is None:
         return None
     return {'book_equity': float(eq), 'shares': shares, 'bvps': float(eq) / shares}
 
