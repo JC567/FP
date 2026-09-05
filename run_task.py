@@ -234,6 +234,12 @@ class TaskApp:
         self.btn_dv_refresh = ttk.Button(bar, text='刷新', style='Small.TButton',
                                          command=lambda: self._load_data_view(self.dv_choice.get()))
         self.btn_dv_refresh.pack(side='left')
+        ttk.Separator(bar, orient='vertical').pack(side='left', fill='y', padx=(8, 8))
+        ttk.Label(bar, text='搜索：', style='Muted.TLabel').pack(side='left')
+        self.dv_search = ttk.Entry(bar, width=20)
+        self.dv_search.pack(side='left', padx=(4, 0))
+        self.dv_search.bind('<Return>', lambda e: self._apply_dv_search())
+        self.dv_search.bind('<KeyRelease>', lambda e: self._apply_dv_search())
         self.btn_jump = ttk.Button(bar, text='配置选中股票 →', style='Small.TButton',
                                    command=self._jump_selected_to_config, state='disabled')
         self.btn_jump.pack(side='left', padx=(10, 0))
@@ -367,6 +373,15 @@ class TaskApp:
                 conn = _db.connect()
                 ind_map = _db.get_industry_map(conn)
                 conn.close()
+                if ind_map:
+                    df['行业'] = df['代码'].astype(str).str.zfill(6).map(lambda c: ind_map.get(c, ''))
+            except Exception:
+                pass
+        # If industry column is still empty or missing, try to populate from network
+        if ('行业' not in df.columns or df['行业'].eq('').all() or df['行业'].isna().all()) and '代码' in df.columns:
+            try:
+                from industry_map import ensure_industry_map
+                ind_map = ensure_industry_map()
                 if ind_map:
                     df['行业'] = df['代码'].astype(str).str.zfill(6).map(lambda c: ind_map.get(c, ''))
             except Exception:
@@ -723,10 +738,23 @@ class TaskApp:
                 return s.astype(str).str.contains(expr, na=False, regex=False)
         return s.astype(str).str.contains(expr, na=False, regex=False)
 
+    def _apply_dv_search(self):
+        """Apply search filter to data view (search by name or code)."""
+        self._render_data_view()
+
     def _render_data_view(self):
         df = self.dv_df
         if df is None:
             return
+        # Apply search filter (search by name or code)
+        search_text = self.dv_search.get().strip()
+        if search_text:
+            mask = pd.Series([False] * len(df), index=df.index)
+            if '名称' in df.columns:
+                mask = mask | df['名称'].astype(str).str.contains(search_text, na=False, case=False)
+            if '代码' in df.columns:
+                mask = mask | df['代码'].astype(str).str.contains(search_text, na=False, case=False)
+            df = df[mask]
         for col, expr in self.dv_filters.items():
             df = df[self._dv_filter_mask(df, col, expr)]
         if self.dv_sort[0]:
