@@ -120,8 +120,8 @@ class ReportImportTab:
         industry = industry_info.get('industry', '') if industry_info else ''
         industry_type = industry_info.get('industry_type', '') if industry_info else ''
 
-        if not any(k in industry for k in BANK_INDUSTRIES):
-            messagebox.showwarning('提示', f'当前行业：{industry}\n暂不支持该行业的财报解读，仅支持银行业')
+        if not any(k in industry for k in BANK_INDUSTRIES) and not any(k in industry_type for k in BANK_INDUSTRIES):
+            messagebox.showwarning('提示', f'当前行业：{industry or industry_type}\n暂不支持该行业的财报解读，仅支持银行业')
             return
 
         self._set_busy(True, '正在解析...')
