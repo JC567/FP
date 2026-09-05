@@ -314,6 +314,10 @@ class TaskApp:
         self.dv.bind('<<TreeviewSelect>>', self._on_dv_select)
         self.dv.bind('<Button-1>', self._on_dv_heading_click, add='+')
         self.dv.bind('<Double-1>', self._on_dv_double, add='+')
+        self.dv.bind('<Button-3>', self._on_dv_right_click)  # Right-click menu
+        # Column selection state for copy
+        self.dv_selected_cols = set()
+        self.dv.bind('<Control-Button-1>', self._on_dv_col_toggle)  # Ctrl+Click to select column
 
     def _load_data_view(self, which):
         path = OUT_FILT if which == '筛选后' else OUT_FULL
@@ -736,6 +740,8 @@ class TaskApp:
         cols = list(self.dv['columns'])
         for c in cols:
             mark = ' ▾' if c in self.dv_filters else ''
+            if c in self.dv_selected_cols:
+                mark = ' ✓' + mark
             self.dv.heading(c, text=c + mark)
 
     def _dv_filter_mask(self, df, col, expr):
@@ -765,6 +771,67 @@ class TaskApp:
     def _apply_dv_search(self):
         """Apply search filter to data view (search by name or code)."""
         self._render_data_view()
+
+    def _on_dv_right_click(self, e):
+        """Right-click context menu for copy operations."""
+        import tkinter.messagebox as mb
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label='复制选中行', command=self._copy_selected_rows)
+        menu.add_command(label='复制选中列', command=self._copy_selected_cols)
+        menu.add_separator()
+        menu.add_command(label='全选', command=lambda: self.dv.selection_set(self.dv.get_children()))
+        menu.add_command(label='取消选择', command=lambda: self.dv.selection_remove(self.dv.get_children()))
+        try:
+            menu.tk_popup(e.x_root, e.y_root)
+        finally:
+            menu.grab_release()
+
+    def _copy_selected_rows(self):
+        """Copy selected rows to clipboard (tab-separated)."""
+        import tkinter.clipboard as clip
+        sel = self.dv.selection()
+        if not sel:
+            return
+        cols = list(self.dv['columns'])
+        lines = ['\t'.join(cols)]  # Header
+        for iid in sel:
+            values = self.dv.item(iid, 'values')
+            lines.append('\t'.join(str(v) for v in values))
+        clip.clear()
+        clip.append('\n'.join(lines))
+
+    def _copy_selected_cols(self):
+        """Copy selected columns to clipboard (tab-separated)."""
+        import tkinter.clipboard as clip
+        if not self.dv_selected_cols:
+            return
+        cols = list(self.dv['columns'])
+        sel_cols = [c for c in cols if c in self.dv_selected_cols]
+        if not sel_cols:
+            return
+        lines = ['\t'.join(sel_cols)]  # Header
+        for iid in self.dv.get_children():
+            values = self.dv.item(iid, 'values')
+            row = [str(values[cols.index(c)]) if cols.index(c) < len(values) else '' for c in sel_cols]
+            lines.append('\t'.join(row))
+        clip.clear()
+        clip.append('\n'.join(lines))
+
+    def _on_dv_col_toggle(self, e):
+        """Ctrl+Click on heading to toggle column selection for copy."""
+        region = self.dv.identify_region(e.x, e.y)
+        if region != 'heading':
+            return
+        col = self.dv.identify_column(e.x)
+        try:
+            col_name = self.dv['columns'][int(col[1:]) - 1]
+        except Exception:
+            return
+        if col_name in self.dv_selected_cols:
+            self.dv_selected_cols.discard(col_name)
+        else:
+            self.dv_selected_cols.add(col_name)
+        self._update_dv_headings()
 
     def _render_data_view(self):
         df = self.dv_df
