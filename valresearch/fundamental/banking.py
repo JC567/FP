@@ -217,13 +217,47 @@ def _get_latest_standalone_equity_from_db(symbol: str, asof_date: str) -> Option
     return None
 
 
-def bank_book_asof(fin, symbol: str, t):
-    """银行业每股净资产 = 归母权益 / 近似股本(归母净利/基本EPS)。
+def _get_bvps_from_db(symbol: str, asof_date: str) -> Optional[tuple]:
+    """从本地年报数据库读取截至 asof_date 的每股净资产（报告直接披露值）。"""
+    try:
+        import sqlite3
+        db_path = _get_db_path()
+        if not db_path.exists():
+            return None
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT fd.metric_value, fd.period FROM financial_data fd
+            JOIN annual_reports ar ON fd.report_id = ar.id
+            WHERE ar.symbol = ? AND fd.metric_name = '每股净资产'
+            AND fd.period <= ?
+            ORDER BY fd.period DESC LIMIT 1
+        ''', (symbol, asof_date))
+        row = cursor.fetchone()
+        conn.close()
+        if row and row[0] is not None:
+            return float(row[0]), row[1]
+    except Exception:
+        pass
+    return None
 
-    关键：权益必须与净利/股本同属一份报告（同报告期），否则 BVPS/PB 失真。
-    优先：本地年报/半年报数据库的单独口径权益与股本（最准确，单独口径）；
-    次选：Sina 资产负债表按报告期匹配（合并口径，可能失真）；
-    兜底：bank_equity_asof（最新 PIT，合并口径，可能失真）。"""
+
+def bank_book_asof(fin, symbol: str, t):
+    """银行业每股净资产。
+
+    优先：直接使用年报/半年报披露的"归属于本行普通股股东的每股净资产"（最准确）；
+    次选：从本地数据库单独口径权益/股本自行计算；
+    再次：Sina 资产负债表按报告期匹配；
+    兜底：bank_equity_asof（最新 PIT，合并口径）。"""
+    # 1) 最优先：从本地PDF数据库直接获取报告披露的每股净资产
+    ts = pd.Timestamp(t).strftime('%Y-%m-%d')
+    bvps_from_db = _get_bvps_from_db(symbol, ts)
+    if bvps_from_db is not None:
+        bvps_val, bvps_period = bvps_from_db
+        if bvps_val > 0:
+            return {'bvps': bvps_val, 'source': 'local_pdf_reported', 'period': bvps_period}
+
+    # 2) 次选：从本地数据库权益/股本计算
     row = _last_annual(fin, t)
     if row is None:
         return None
@@ -235,9 +269,6 @@ def bank_book_asof(fin, symbol: str, t):
     if shares <= 0:
         return None
 
-    # 1) 优先：本地年报/半年报数据库的单独口径权益与股本（最准确，单独口径）
-    # 获取截至 t 的最新单独口径权益和股本（含年报、半年报）
-    ts = pd.Timestamp(t).strftime('%Y-%m-%d')
     latest = _get_latest_standalone_equity_from_db(symbol, ts)
     if latest is not None:
         eq, db_shares, eq_period = latest
@@ -246,7 +277,7 @@ def bank_book_asof(fin, symbol: str, t):
     else:
         eq = None
 
-    # 2) 次选：Sina 资产负债表按年报期匹配（合并口径，可能失真）
+    # 3) 再次：Sina 资产负债表按报告期匹配
     if eq is None:
         rptime = str(row.get('report_period', '') or '')[:10]
         df = _sina_balance_sheet(symbol)
@@ -256,12 +287,12 @@ def bank_book_asof(fin, symbol: str, t):
             if not match.empty:
                 eq = match.iloc[0]['eq']
 
-    # 3) 兜底：最新 PIT（合并口径，可能失真）
+    # 4) 兜底
     if eq is None:
         eq = bank_equity_asof(symbol, t)[2]
     if eq is None:
         return None
-    return {'book_equity': float(eq), 'shares': shares, 'bvps': float(eq) / shares}
+    return {'book_equity': float(eq), 'shares': shares, 'bvps': float(eq) / shares, 'source': 'calculated'}
 
 
 def _last_annual(fin, t=None) -> Optional[pd.Series]:

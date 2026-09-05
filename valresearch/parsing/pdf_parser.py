@@ -69,6 +69,7 @@ class PDFParser:
     }
 
     BANK_RATIOS = {
+        '归属于本行普通股股东的每股净资产': {'name': '每股净资产', 'unit': '元', 'category': 'balance'},
         '核心一级资本充足率': {'name': '核心一级资本充足率', 'unit': '%', 'category': 'capital_adequacy'},
         '一级资本充足率': {'name': '一级资本充足率', 'unit': '%', 'category': 'capital_adequacy'},
         '资本充足率': {'name': '资本充足率', 'unit': '%', 'category': 'capital_adequacy'},
@@ -146,8 +147,12 @@ class PDFParser:
     def _extract_metrics_from_text(self, all_text: List[Tuple[int, str]], result: ParseResult):
         for page_num, text in all_text:
             lines = text.split('\n')
-            for line in lines:
+            for i, line in enumerate(lines):
                 self._parse_metric_line(line, page_num, result)
+                # 处理跨行：关键词在当前行，数值在下一行
+                if i + 1 < len(lines):
+                    merged = line.strip() + ' ' + lines[i + 1].strip()
+                    self._parse_metric_line(merged, page_num, result)
 
     def _parse_metric_line(self, line: str, page_num: int, result: ParseResult):
         line = line.strip()
@@ -198,7 +203,7 @@ class PDFParser:
                         result.metrics.append(MetricValue(
                             metric_name=info['name'],
                             value=value,
-                            unit='%',
+                            unit=info['unit'],
                             period=result.report_date,
                             is_consolidated=True,
                             page_number=page_num,
@@ -218,7 +223,8 @@ class PDFParser:
         return None
 
     def _extract_ratio_after_keyword(self, line: str, keyword: str) -> Optional[float]:
-        pattern = re.escape(keyword) + r'\s*([\d,\.]+)'
+        # 跳过括号内的数字（如脚注标记(1)），找到第一个真正的数值
+        pattern = re.escape(keyword) + r'.*?[\)\）]\s*([\d,\.]+)'
         match = re.search(pattern, line)
         if match:
             num_str = match.group(1).replace(',', '')
