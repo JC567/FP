@@ -60,8 +60,8 @@ STEPS = [
 
 # 手动配置树：可编辑的列（字段名）
 CFG_EDITABLE = {'是否保留': '是否保留', '买入提醒pe': '买入提醒pe',
-                '买入提醒价格': '买入提醒价格', '买入pb': '买入pb'}
-CONFIG_COLS = ['代码', '名称', '是否保留', '买入提醒pe', '买入提醒价格', '买入pb']
+                '买入提醒价格': '买入提醒价格', '买入pb': '买入pb', '行业': '行业'}
+CONFIG_COLS = ['代码', '名称', '行业', '是否保留', '买入提醒pe', '买入提醒价格', '买入pb']
 
 
 def norm_code(x):
@@ -788,7 +788,6 @@ class TaskApp:
 
     def _copy_selected_rows(self):
         """Copy selected rows to clipboard (tab-separated)."""
-        import tkinter.clipboard as clip
         sel = self.dv.selection()
         if not sel:
             return
@@ -797,12 +796,11 @@ class TaskApp:
         for iid in sel:
             values = self.dv.item(iid, 'values')
             lines.append('\t'.join(str(v) for v in values))
-        clip.clear()
-        clip.append('\n'.join(lines))
+        self.root.clipboard_clear()
+        self.root.clipboard_append('\n'.join(lines))
 
     def _copy_selected_cols(self):
         """Copy selected columns to clipboard (tab-separated)."""
-        import tkinter.clipboard as clip
         if not self.dv_selected_cols:
             return
         cols = list(self.dv['columns'])
@@ -814,8 +812,8 @@ class TaskApp:
             values = self.dv.item(iid, 'values')
             row = [str(values[cols.index(c)]) if cols.index(c) < len(values) else '' for c in sel_cols]
             lines.append('\t'.join(row))
-        clip.clear()
-        clip.append('\n'.join(lines))
+        self.root.clipboard_clear()
+        self.root.clipboard_append('\n'.join(lines))
 
     def _on_dv_col_toggle(self, e):
         """Ctrl+Click on heading to toggle column selection for copy."""
@@ -914,7 +912,7 @@ class TaskApp:
         self.cfg_search.delete(0, 'end')
         self.cfg_only.set(False)
         if not any(r['代码'] == code for r in self.cfg_rows):
-            row = {'代码': code, '名称': '', '是否保留': '',
+            row = {'代码': code, '名称': '', '行业': '', '是否保留': '',
                    '买入提醒pe': '', '买入提醒价格': '', '买入pb': ''}
             src = self._result_row_for(code)
             if src:
@@ -922,6 +920,7 @@ class TaskApp:
                 for k in CFG_EDITABLE:
                     row[k] = src.get(k, '')
             self.cfg_rows.append(row)
+            self._fill_industries(self.cfg_rows)
         self._render_config()
         iid = next((str(i) for i, r in enumerate(self.cfg_rows) if r['代码'] == code), None)
         if iid is None:
@@ -1138,7 +1137,7 @@ class TaskApp:
         ttk.Button(bar, text='💾 保存配置', style='Accent.TButton',
                    command=self._save_config).pack(side='right')
 
-        tip = tk.Label(tab, text='双击单元格可编辑：是否保留(是/否)、买入提醒pe、买入提醒价格、买入pb。'
+        tip = tk.Label(tab, text='双击单元格可编辑：行业、是否保留(是/否)、买入提醒pe、买入提醒价格、买入pb。'
                                 '保存后写入 data/排除/手动配置.csv，下次运行自动按新值计算、判断与展示。',
                        bg=CARD, fg=MUTED, font=('Microsoft YaHei', 9), anchor='w', justify='left')
         tip.grid(row=1, column=0, sticky='ew', pady=(0, 6))
@@ -1150,7 +1149,7 @@ class TaskApp:
         vs = ttk.Scrollbar(wrap, orient='vertical', command=self.cfg_tv.yview)
         hs = ttk.Scrollbar(wrap, orient='horizontal', command=self.cfg_tv.xview)
         self.cfg_tv.configure(yscrollcommand=vs.set, xscrollcommand=hs.set)
-        widths = {'代码': 80, '名称': 120, '是否保留': 90, '买入提醒pe': 110,
+        widths = {'代码': 80, '名称': 120, '行业': 80, '是否保留': 90, '买入提醒pe': 110,
                   '买入提醒价格': 110, '买入pb': 90}
         for c in CONFIG_COLS:
             self.cfg_tv.heading(c, text=c)
@@ -1180,12 +1179,14 @@ class TaskApp:
                 rows.append({
                     '代码': r['代码'],
                     '名称': '',
+                    '行业': _s(r.get('行业')),
                     '是否保留': _s(r.get('是否保留')),
                     '买入提醒pe': _s(r.get('买入提醒pe')),
                     '买入提醒价格': _s(r.get('买入提醒价格')),
                     '买入pb': _s(r.get('买入pb')),
                 })
         self._fill_names(rows)
+        self._fill_industries(rows)
         self.cfg_rows = rows
         self._render_config()
 
@@ -1203,11 +1204,13 @@ class TaskApp:
             s = saved.get(r['代码'], {})
             rows.append({
                 '代码': r['代码'], '名称': str(r.get('名称', '')),
+                '行业': s.get('行业', ''),
                 '是否保留': s.get('是否保留', ''),
                 '买入提醒pe': s.get('买入提醒pe', ''),
                 '买入提醒价格': s.get('买入提醒价格', ''),
                 '买入pb': s.get('买入pb', ''),
             })
+        self._fill_industries(rows)
         self.cfg_rows = rows
         self._render_config()
 
@@ -1223,6 +1226,49 @@ class TaskApp:
             if not r['名称']:
                 r['名称'] = names.get(r['代码'], '')
 
+    def _fill_industries(self, rows):
+        """从本地缓存或关键词推断补全行业。"""
+        # Try to get industry map from vr_stocks
+        ind_map = {}
+        try:
+            import stock_db as _db
+            conn = _db.connect()
+            ind_map = _db.get_industry_map(conn)
+            conn.close()
+        except Exception:
+            pass
+        
+        # Keyword-based industry inference for stocks not in cache
+        BANK_NAMES = ('银行', '工商银行', '建设银行', '农业银行', '中国银行', '交通银行', '邮储银行',
+                     '招商银行', '浦发银行', '民生银行', '中信银行', '光大银行', '华夏银行', '平安银行',
+                     '北京银行', '江苏银行', '上海银行', '宁波银行', '南京银行', '杭州银行', '成都银行',
+                     '长沙银行', '郑州银行', '西安银行', '青岛银行', '苏州银行', '重庆银行', '厦门银行',
+                     '兴业银行', '广发银行', '渤海银行', '恒丰银行', '浙商银行')
+        INSUR_KEYWORDS = ('保险', '人寿', '新华保险', '中国太保', '中国人保')
+        SEC_KEYWORDS = ('证券', '中信证券', '国泰君安', '海通证券', '华泰证券', '招商证券', '广发证券')
+        REAL_KEYWORDS = ('万科', '保利发展', '招商蛇口', '金地集团', '华侨城', '新城控股')
+        
+        def infer_industry(name):
+            name = str(name)
+            if any(k in name for k in BANK_NAMES):
+                return '银行'
+            elif any(k in name for k in INSUR_KEYWORDS):
+                return '保险'
+            elif any(k in name for k in SEC_KEYWORDS):
+                return '证券'
+            elif any(k in name for k in REAL_KEYWORDS):
+                return '房地产'
+            return ''
+        
+        for r in rows:
+            if not r.get('行业'):
+                code = r['代码']
+                name = r.get('名称', '')
+                if code in ind_map:
+                    r['行业'] = ind_map[code]
+                elif name:
+                    r['行业'] = infer_industry(name)
+
     def _add_config_stock(self):
         code = self.cfg_add_code.get().strip().replace(r'\D', '')
         if not code:
@@ -1232,9 +1278,10 @@ class TaskApp:
         if any(r['代码'] == code for r in self.cfg_rows):
             messagebox.showinfo('提示', '该代码已在列表中。')
             return
-        self.cfg_rows.append({'代码': code, '名称': '', '是否保留': '',
+        self.cfg_rows.append({'代码': code, '名称': '', '行业': '', '是否保留': '',
                               '买入提醒pe': '', '买入提醒价格': '', '买入pb': ''})
         self._fill_names(self.cfg_rows)
+        self._fill_industries(self.cfg_rows)
         self.cfg_add_code.delete(0, 'end')
         self._render_config()
 
@@ -1620,7 +1667,7 @@ LOGIC_TEXT = """1号任务 · A股分红率排名 —— 计算逻辑
 七、应用内操作
   ·「数据查看」页签：直接查看 csv 数据（可切换 全量/筛选后），带黄/绿高亮，
     实际文件仍生成于 data/ 目录。
-  ·「手动配置」页签：双击编辑 L~O 列（是否保留/买入提醒pe/买入提醒价格/买入pb），
+  ·「手动配置」页签：双击编辑 L~O 列（行业/是否保留/买入提醒pe/买入提醒价格/买入pb），
     保存到 data/排除/手动配置.csv，下次运行按新值计算、判断与展示。
 """
 
