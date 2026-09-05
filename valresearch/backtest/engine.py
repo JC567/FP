@@ -548,7 +548,7 @@ def run_backtest(symbol: str, start: str, end: str = None, mode: str = 'balanced
         pe_pct = pd.to_numeric(df.get('pe_pct'), errors='coerce') if 'pe_pct' in df.columns else pd.Series([np.nan] * len(df))
         dy_pct = pd.to_numeric(df.get('dy_pct'), errors='coerce') if 'dy_pct' in df.columns else pd.Series([np.nan] * len(df))
         # 便宜：有 PB 用破净(PB≤1.0)；否则退回历史估值分位(PE分位≤30% 或 股息率分位≥70%)
-        # 强烈买入区(强买档)：深度破净(PB≤0.85) 或 极低估(PE分位≤15% 或 股息率分位≥85%)；强买 ⊂ 便宜
+        # 强烈买入区(强买档)：深度破净(PB≤0.80) 或 极低估(PE分位≤15% 或 股息率分位≥85%)；强买 ⊂ 便宜
         pb_cheap = pb.notna() & (pb > 0) & (pb <= _BUFFETT_BANK_PB_CHEAP)
         pb_strong = pb.notna() & (pb > 0) & (pb <= buffett_mod._BANK_PB_STRONG)
         pct_cheap = (pe_pct <= _BUFFETT_PE_PCT_MAX) | (dy_pct >= _BUFFETT_DY_PCT_MIN)
