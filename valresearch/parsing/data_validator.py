@@ -106,13 +106,16 @@ class DataValidator:
         return comparisons
 
     def _extract_api_data(self, api_row) -> Dict[str, float]:
+        ta = api_row.get('total_assets')
+        tl = api_row.get('total_liabilities')
+        equity = (ta - tl) if ta is not None and tl is not None else None
         return {
             '营业收入': api_row.get('revenue'),
             '归母净利润': api_row.get('net_profit_attr'),
             '基本每股收益': api_row.get('eps_basic'),
-            '总资产': api_row.get('total_assets'),
-            '总负债': api_row.get('total_liabilities'),
-            '归母权益': api_row.get('total_assets', 0) - api_row.get('total_liabilities', 0),
+            '总资产': ta,
+            '总负债': tl,
+            '归母权益': equity,
             '经营活动现金流量净额': api_row.get('ocf'),
             '净利息收入': None,
             '手续费及佣金收入': None
