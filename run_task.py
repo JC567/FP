@@ -124,6 +124,7 @@ class TaskApp:
         self._build_data_tab(self.nb)
         self._build_config_tab(self.nb)
         self._build_vr_tab(self.nb)
+        self._build_report_import_tab(self.nb)
 
     def _header(self):
         h = tk.Frame(self.root, bg=ACCENT, height=58)
@@ -143,6 +144,18 @@ class TaskApp:
             tab = ttk.Frame(nb, style='Card.TFrame', padding=14)
             nb.add(tab, text='  红利价值分位研究  ')
             ttk.Label(tab, text=f'页签初始化失败：{e}\n请确认 valresearch 包可导入。',
+                      style='Muted.TLabel').pack(anchor='w')
+
+    # ---------- 页签5：财报导入分析 ----------
+    def _build_report_import_tab(self, nb):
+        try:
+            from valresearch.gui.report_import_tab import build_report_import_tab
+            tab = build_report_import_tab(nb)
+            nb.add(tab.tab, text='  财报导入分析  ')
+        except Exception as e:
+            tab = ttk.Frame(nb, style='Card.TFrame', padding=14)
+            nb.add(tab, text='  财报导入分析  ')
+            ttk.Label(tab, text=f'页签初始化失败：{e}\n请确认 valresearch.parsing 包可导入。',
                       style='Muted.TLabel').pack(anchor='w')
 
     # ---------- 页签1：运行 ----------

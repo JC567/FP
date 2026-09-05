@@ -153,6 +153,94 @@ class FinancialDataProvider:
         '3-31': (4, 30), '6-30': (8, 31), '9-30': (10, 31), '12-31': (4, 30)}
 
     def get_financials(self, symbol: str, start_year: int = 2013) -> Optional[pd.DataFrame]:
+        # 1. 先查询本地年报数据库
+        local_data = self._get_local_financials(symbol, start_year)
+        if local_data is not None:
+            return local_data
+
+        # 2. 查询API数据
+        return self._get_api_financials(symbol, start_year)
+
+    def _get_local_financials(self, symbol: str, start_year: int) -> Optional[pd.DataFrame]:
+        try:
+            import sqlite3
+            from pathlib import Path
+            db_path = Path(__file__).resolve().parents[2] / 'data' / 'annual_reports.db'
+            if not db_path.exists():
+                return None
+            conn = sqlite3.connect(str(db_path))
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT ar.symbol, ar.report_date, ar.report_type, ar.report_year, ar.report_period,
+                       fd.metric_name, fd.metric_value, fd.metric_unit, fd.period, fd.is_consolidated
+                FROM annual_reports ar
+                JOIN financial_data fd ON ar.id = fd.report_id
+                WHERE ar.symbol = ?
+                ORDER BY ar.report_date DESC
+            ''', (symbol,))
+
+            rows = cursor.fetchall()
+            conn.close()
+
+            if not rows:
+                return None
+
+            financials = []
+            for row in rows:
+                financials.append({
+                    'symbol': row[0],
+                    'report_date': row[1],
+                    'report_type': row[2],
+                    'report_year': row[3],
+                    'report_period': row[4],
+                    'metric_name': row[5],
+                    'metric_value': row[6],
+                    'metric_unit': row[7],
+                    'period': row[8],
+                    'is_consolidated': bool(row[9])
+                })
+
+            df = pd.DataFrame(financials)
+
+            if df.empty:
+                return None
+
+            pivot_df = df.pivot_table(
+                index='report_period',
+                columns='metric_name',
+                values='metric_value',
+                aggfunc='first'
+            ).reset_index()
+
+            column_mapping = {
+                '营业收入': 'revenue',
+                '归母净利润': 'net_profit_attr',
+                '基本每股收益': 'eps_basic',
+                '经营活动现金流量净额': 'ocf',
+                '资产合计': 'total_assets',
+                '负债合计': 'total_liabilities',
+                '股本': 'shares'
+            }
+
+            pivot_df = pivot_df.rename(columns=column_mapping)
+
+            pivot_df['report_period'] = pd.to_datetime(pivot_df['report_period'], errors='coerce')
+
+            pivot_df['symbol'] = symbol
+            pivot_df['announcement_date'] = pivot_df['report_period']
+            pivot_df['data_source'] = 'local_pdf'
+            pivot_df['industry_type'] = '银行'
+
+            if 'total_assets' in pivot_df.columns and 'total_liabilities' in pivot_df.columns:
+                pivot_df['equity'] = pivot_df['total_assets'] - pivot_df['total_liabilities']
+
+            return pivot_df
+
+        except Exception as e:
+            return None
+
+    def _get_api_financials(self, symbol: str, start_year: int) -> Optional[pd.DataFrame]:
         conn = db.connect()
         try:
             cached = db.get_vr_financials(conn, symbol)
