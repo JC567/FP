@@ -153,13 +153,14 @@ class FinancialDataProvider:
         '3-31': (4, 30), '6-30': (8, 31), '9-30': (10, 31), '12-31': (4, 30)}
 
     def get_financials(self, symbol: str, start_year: int = 2013) -> Optional[pd.DataFrame]:
-        # 1. 先查询本地年报数据库
-        local_data = self._get_local_financials(symbol, start_year)
-        if local_data is not None:
-            return local_data
+        # API数据优先（包含完整历史数据，支持PIT）
+        api_data = self._get_api_financials(symbol, start_year)
+        if api_data is not None:
+            return api_data
 
-        # 2. 查询API数据
-        return self._get_api_financials(symbol, start_year)
+        # API失败时，尝试本地年报数据库（数据可能不完整）
+        local_data = self._get_local_financials(symbol, start_year)
+        return local_data
 
     def _get_local_financials(self, symbol: str, start_year: int) -> Optional[pd.DataFrame]:
         try:
