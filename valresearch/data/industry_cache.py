@@ -240,84 +240,141 @@ def _infer_industry_from_name(name):
         return '银行'
     
     # 保险
-    insur_keywords = ('保险', '人寿')
+    insur_keywords = ('保险', '人寿', '新华保险', '中国太保', '中国人保')
     if any(k in name for k in insur_keywords):
         return '保险'
     
     # 证券
-    sec_keywords = ('证券', '券商')
+    sec_keywords = ('证券', '券商', '中信证券', '国泰君安', '海通证券', '华泰证券')
     if any(k in name for k in sec_keywords):
         return '证券'
     
     # 房地产
-    real_keywords = ('地产', '房产', '置业', '家居', '家具')
+    real_keywords = ('地产', '房产', '置业', '家居', '家具', '装饰', '建材', '万科', '保利',
+                    '招商蛇口', '金地', '华侨城', '新城', '华夏幸福', '碧桂园', '恒大',
+                    '融创', '龙湖', '绿城', '富力', '远洋', '中国奥园', '雅居乐')
     if any(k in name for k in real_keywords):
         return '房地产'
     
     # 食品饮料
-    food_keywords = ('食品', '味', '酒', '奶', '乳', '饮料', '面包', '餐饮', '米', '油', '盐', '糖', '茶')
+    food_keywords = ('食品', '味', '酒', '奶', '乳', '饮料', '面包', '餐饮', '米', '油', '盐', '糖', '茶',
+                    '茅台', '五粮液', '泸州老窖', '汾酒', '洋河', '伊利', '蒙牛', '光明', '双汇', '海天',
+                    '中粮', '三元', '完达山', '娃哈哈', '农夫山泉', '元气森林')
     if any(k in name for k in food_keywords):
         return '食品行业'
     
+    # 酿酒
+    wine_keywords = ('酒', '茅台', '五粮液', '泸州老窖', '汾酒', '洋河', '古井贡', '口子窖', '老白干',
+                    '舍得', '酒鬼', '水井坊', '金徽酒', '今世缘')
+    if any(k in name for k in wine_keywords):
+        return '酿酒行业'
+    
     # 家电
-    home_keywords = ('电器', '家电', '照明', '灯')
+    home_keywords = ('电器', '家电', '照明', '灯', '空调', '冰箱', '洗衣机', '美的', '格力', '海尔',
+                    'TCL', '海信', '创维', '长虹', '康佳', '小熊', '苏泊尔', '九阳')
     if any(k in name for k in home_keywords):
         return '家电行业'
     
     # 纺织服装
-    textile_keywords = ('纺织', '服装', '鞋', '衣', '家纺')
+    textile_keywords = ('纺织', '服装', '鞋', '衣', '家纺', '袜', '帽', '安踏', '李宁', '特步',
+                    '361度', '鸿星尔克', '森马', '美特斯邦威', '海澜之家', '太平鸟')
     if any(k in name for k in textile_keywords):
         return '纺织行业'
     
     # 医药
-    medical_keywords = ('药', '医', '生物', '健康', '制药')
+    medical_keywords = ('药', '医', '生物', '健康', '制药', '恒瑞', '药明康德', '迈瑞医疗',
+                    '爱尔眼科', '通策医疗', '片仔癀', '云南白药', '同仁堂', '东阿阿胶')
     if any(k in name for k in medical_keywords):
         return '生物制药'
     
     # 汽车
-    auto_keywords = ('汽车', '车', '轮胎')
+    auto_keywords = ('汽车', '车', '轮胎', '比亚迪', '长城汽车', '吉利', '长安', '上汽', '广汽',
+                    '一汽', '北汽', '奇瑞', '江淮', '力帆', '众泰', '东风')
     if any(k in name for k in auto_keywords):
         return '汽车制造'
     
     # 建筑建材
-    construction_keywords = ('建筑', '建材', '水泥', '工程', '设计院')
+    construction_keywords = ('建筑', '建材', '水泥', '混凝土', '工程', '设计院', '中国建筑',
+                    '中国中铁', '中国铁建', '中国交建', '中国电建', '海螺水泥', '华新水泥')
     if any(k in name for k in construction_keywords):
         return '建筑建材'
     
     # 化工
-    chemical_keywords = ('化工', '化学', '材料')
+    chemical_keywords = ('化工', '化学', '材料', '树脂', '涂料', '万华化学', '恒力石化',
+                    '荣盛石化', '桐昆股份', '卫星石化', '新和成', '龙蟒佰利')
     if any(k in name for k in chemical_keywords):
         return '化工行业'
     
     # 机械
-    machinery_keywords = ('机械', '设备', '仪器', '仪表', '数控')
+    machinery_keywords = ('机械', '设备', '仪器', '仪表', '数控', '泵', '三一重工', '中联重科',
+                    '徐工机械', '柳工', '安徽合力', '杭叉集团', '艾迪精密')
     if any(k in name for k in machinery_keywords):
         return '机械行业'
     
     # 交通运输
-    transport_keywords = ('物流', '运输', '港口', '航运', '铁路', '公路')
+    transport_keywords = ('物流', '运输', '港口', '航运', '快递', '铁路', '公路', '大桥',
+                    '中远海控', '招商轮船', '中国外运', '顺丰', '中通', '韵达', '圆通', '申通')
     if any(k in name for k in transport_keywords):
         return '交通运输'
     
+    # 煤炭（放在电力能源之前，因为煤炭更具体）
+    coal_keywords = ('煤', '神华', '中煤', '兖矿', '陕西煤业', '淮北矿业', '平煤', '潞安',
+                    '阳泉', '大同', '晋煤', '焦煤')
+    if any(k in name for k in coal_keywords):
+        return '煤炭行业'
+    
     # 电力能源
-    energy_keywords = ('能源', '燃气', '电力', '电气', '天然气')
+    energy_keywords = ('能源', '燃气', '电力', '电气', '天然气', '风电', '光伏',
+                    '中煤能源', '中国石油', '中国石化', '中海油', '长江电力', '华能国际',
+                    '国电电力', '大唐发电')
     if any(k in name for k in energy_keywords):
         return '电力行业'
     
+    # 保险
+    insur_keywords = ('保险', '人寿', '平安', '新华保险', '中国太保', '中国人保')
+    if any(k in name for k in insur_keywords):
+        return '保险'
+    
     # 商业零售
-    retail_keywords = ('百货', '商业', '零售', '黄金', '珠宝')
+    retail_keywords = ('百货', '商业', '零售', '黄金', '珠宝', '中国中免', '王府井', '重庆百货',
+                    '天虹股份', '永辉超市', '家家悦', '红旗连锁', '步步高')
     if any(k in name for k in retail_keywords):
         return '商业百货'
     
     # 科技电子
-    tech_keywords = ('科技', '电子', '软件', '信息', '网络', '通信', '智能')
+    tech_keywords = ('科技', '电子', '软件', '信息', '网络', '通信', '智能', '华为', '中兴',
+                    '海康威视', '大华股份', '歌尔股份', '立讯精密', '京东方', 'TCL科技',
+                    '用友网络', '金山办公', '科大讯飞', '中芯国际', '韦尔股份')
     if any(k in name for k in tech_keywords):
         return '电子信息'
     
     # 环保
-    env_keywords = ('环保', '环境')
+    env_keywords = ('环保', '环境', '污水', '垃圾', '碧水源', '首创环保', '瀚蓝环境')
     if any(k in name for k in env_keywords):
         return '环保行业'
+    
+    # 农业
+    agri_keywords = ('农', '种', '牧', '渔', '林', '牧原股份', '温氏股份', '新希望',
+                    '正邦科技', '天邦食品', '傲农生物', '大北农', '海大集团', '新希望')
+    if any(k in name for k in agri_keywords):
+        return '农林牧渔'
+    
+    # 传媒
+    media_keywords = ('传媒', '文化', '出版', '影视', '游戏', '芒果超媒', '光线传媒',
+                    '华策影视', '中国电影', '万达电影', '分众传媒')
+    if any(k in name for k in media_keywords):
+        return '传媒娱乐'
+    
+    # 钢铁
+    steel_keywords = ('钢铁', '钢', '铁', '宝钢', '鞍钢', '河钢', '沙钢', '建龙', '首钢')
+    if any(k in name for k in steel_keywords):
+        return '钢铁行业'
+    
+    # 有色金属
+    metal_keywords = ('有色', '铜', '铝', '锌', '黄金', '银', '稀土', '锂', '紫金矿业',
+                    '北方稀土', '赣锋锂业', '天齐锂业', '华友钴业', '洛阳钼业')
+    if any(k in name for k in metal_keywords):
+        return '有色金属'
     
     return ''
 
