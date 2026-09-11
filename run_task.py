@@ -364,55 +364,35 @@ class TaskApp:
     @staticmethod
     def _prepare_data_view(df, ttm_map):
         """数据查看页字段处理：
-        - 行业：优先用 CSV 自带列；缺失时从 vr_stocks 缓存补（不触网），置于 名称 之后
+        - 行业：优先用 CSV 自带列；缺失时从 industry_cache 模块获取（本地缓存->远程API->关键词推断）
         - 最新分红率_raw = 近12月(TTM)现金股息总和 ÷ 当前股价 × 100（正常化TTM股息率）
         - 去掉 EPS分红率、昨日分红率
         - 最新分红率 → 最新价格去年分红率
         - 最新分红率_raw 紧随 最新价格去年分红率 之后
         """
         df = df.copy()
-        # 0) 行业列：缺失则从本地缓存(vr_stocks.industry)补，并置于 名称 之后
+        # 0) 行业列：缺失则从 industry_cache 获取，并置于 名称 之后
         if '行业' not in df.columns and '代码' in df.columns:
             try:
-                import stock_db as _db
-                conn = _db.connect()
-                ind_map = _db.get_industry_map(conn)
-                conn.close()
+                from valresearch.data.industry_cache import batch_get_industries
+                codes = df['代码'].astype(str).str.zfill(6).tolist()
+                names = df['名称'].tolist() if '名称' in df.columns else [''] * len(codes)
+                ind_map = batch_get_industries(list(zip(codes, names)))
                 if ind_map:
                     df['行业'] = df['代码'].astype(str).str.zfill(6).map(lambda c: ind_map.get(c, ''))
             except Exception:
                 pass
-        # If industry column is still empty or missing, use keyword inference from stock name
-        if ('行业' not in df.columns or df['行业'].eq('').all() or df['行业'].isna().all()) and '代码' in df.columns:
+        # If industry column is still empty or missing, try to fill missing values
+        if '行业' in df.columns and '代码' in df.columns:
             try:
-                # Keyword-based industry inference (fast, no network)
-                # Use specific bank names to avoid false positives
-                BANK_NAMES = ('银行', '工商银行', '建设银行', '农业银行', '中国银行', '交通银行', '邮储银行',
-                             '招商银行', '浦发银行', '民生银行', '中信银行', '光大银行', '华夏银行', '平安银行',
-                             '北京银行', '江苏银行', '上海银行', '宁波银行', '南京银行', '杭州银行', '成都银行',
-                             '长沙银行', '郑州银行', '西安银行', '青岛银行', '苏州银行', '重庆银行', '厦门银行',
-                             '兴业银行', '广发银行', '渤海银行', '恒丰银行', '浙商银行', '稠州银行', '泰隆银行',
-                             '民泰银行', ' 扶农商银行', '农商银行', '农信社', '信用社')
-                INSUR_KEYWORDS = ('保险', '人寿', '新华保险', '中国太保', '中国人保', '天茂')
-                SEC_KEYWORDS = ('证券', '中信证券', '国泰君安', '海通证券', '华泰证券', '招商证券', '广发证券',
-                               '东方证券', '申万宏源', '中国银河', '中金公司')
-                REAL_KEYWORDS = ('万科', '保利发展', '招商蛇口', '金地集团', '华侨城', '新城控股', '华夏幸福')
-                
-                def infer_industry(name):
-                    name = str(name)
-                    if any(k in name for k in BANK_NAMES):
-                        return '银行'
-                    elif any(k in name for k in INSUR_KEYWORDS):
-                        return '保险'
-                    elif any(k in name for k in SEC_KEYWORDS):
-                        return '证券'
-                    elif any(k in name for k in REAL_KEYWORDS):
-                        return '房地产'
-                    else:
-                        return ''
-                
-                if '名称' in df.columns:
-                    df['行业'] = df['名称'].map(infer_industry)
+                from valresearch.data.industry_cache import get_industry
+                for idx, row in df.iterrows():
+                    if pd.isna(row['行业']) or str(row['行业']).strip() == '':
+                        code = str(row['代码']).zfill(6)
+                        name = str(row.get('名称', ''))
+                        industry = get_industry(code, name)
+                        if industry:
+                            df.at[idx, '行业'] = industry
             except Exception:
                 pass
         if '行业' in df.columns and '名称' in df.columns:
@@ -1238,47 +1218,19 @@ class TaskApp:
                 r['名称'] = names.get(r['代码'], '')
 
     def _fill_industries(self, rows):
-        """从本地缓存或关键词推断补全行业。"""
-        # Try to get industry map from vr_stocks
-        ind_map = {}
+        """从本地缓存或远程API补全行业。"""
         try:
-            import stock_db as _db
-            conn = _db.connect()
-            ind_map = _db.get_industry_map(conn)
-            conn.close()
+            from valresearch.data.industry_cache import get_industry
+            
+            for r in rows:
+                if not r.get('行业'):
+                    code = r['代码']
+                    name = r.get('名称', '')
+                    industry = get_industry(code, name)
+                    if industry:
+                        r['行业'] = industry
         except Exception:
             pass
-        
-        # Keyword-based industry inference for stocks not in cache
-        BANK_NAMES = ('银行', '工商银行', '建设银行', '农业银行', '中国银行', '交通银行', '邮储银行',
-                     '招商银行', '浦发银行', '民生银行', '中信银行', '光大银行', '华夏银行', '平安银行',
-                     '北京银行', '江苏银行', '上海银行', '宁波银行', '南京银行', '杭州银行', '成都银行',
-                     '长沙银行', '郑州银行', '西安银行', '青岛银行', '苏州银行', '重庆银行', '厦门银行',
-                     '兴业银行', '广发银行', '渤海银行', '恒丰银行', '浙商银行')
-        INSUR_KEYWORDS = ('保险', '人寿', '新华保险', '中国太保', '中国人保')
-        SEC_KEYWORDS = ('证券', '中信证券', '国泰君安', '海通证券', '华泰证券', '招商证券', '广发证券')
-        REAL_KEYWORDS = ('万科', '保利发展', '招商蛇口', '金地集团', '华侨城', '新城控股')
-        
-        def infer_industry(name):
-            name = str(name)
-            if any(k in name for k in BANK_NAMES):
-                return '银行'
-            elif any(k in name for k in INSUR_KEYWORDS):
-                return '保险'
-            elif any(k in name for k in SEC_KEYWORDS):
-                return '证券'
-            elif any(k in name for k in REAL_KEYWORDS):
-                return '房地产'
-            return ''
-        
-        for r in rows:
-            if not r.get('行业'):
-                code = r['代码']
-                name = r.get('名称', '')
-                if code in ind_map:
-                    r['行业'] = ind_map[code]
-                elif name:
-                    r['行业'] = infer_industry(name)
 
     def _add_config_stock(self):
         code = self.cfg_add_code.get().strip().replace(r'\D', '')
