@@ -314,10 +314,11 @@ class TaskApp:
         self.dv.bind('<<TreeviewSelect>>', self._on_dv_select)
         self.dv.bind('<Button-1>', self._on_dv_heading_click, add='+')
         self.dv.bind('<Double-1>', self._on_dv_double, add='+')
-        self.dv.bind('<Button-3>', self._on_dv_right_click)  # Right-click menu
         # Column selection state for copy
         self.dv_selected_cols = set()
         self.dv.bind('<Control-Button-1>', self._on_dv_col_toggle)  # Ctrl+Click to select column
+        # Right-click menu (use Button-3 for Windows)
+        self.dv.bind('<Button-3>', self._on_dv_right_click, add='+')
 
     def _load_data_view(self, which):
         path = OUT_FILT if which == '筛选后' else OUT_FULL
@@ -788,32 +789,42 @@ class TaskApp:
 
     def _copy_selected_rows(self):
         """Copy selected rows to clipboard (tab-separated)."""
-        sel = self.dv.selection()
-        if not sel:
-            return
-        cols = list(self.dv['columns'])
-        lines = ['\t'.join(cols)]  # Header
-        for iid in sel:
-            values = self.dv.item(iid, 'values')
-            lines.append('\t'.join(str(v) for v in values))
-        self.root.clipboard_clear()
-        self.root.clipboard_append('\n'.join(lines))
+        try:
+            sel = self.dv.selection()
+            if not sel:
+                return
+            cols = list(self.dv['columns'])
+            lines = ['\t'.join(cols)]  # Header
+            for iid in sel:
+                values = self.dv.item(iid, 'values')
+                lines.append('\t'.join(str(v) for v in values))
+            text = '\n'.join(lines)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.root.update()
+        except Exception as ex:
+            print(f'Copy rows error: {ex}')
 
     def _copy_selected_cols(self):
         """Copy selected columns to clipboard (tab-separated)."""
-        if not self.dv_selected_cols:
-            return
-        cols = list(self.dv['columns'])
-        sel_cols = [c for c in cols if c in self.dv_selected_cols]
-        if not sel_cols:
-            return
-        lines = ['\t'.join(sel_cols)]  # Header
-        for iid in self.dv.get_children():
-            values = self.dv.item(iid, 'values')
-            row = [str(values[cols.index(c)]) if cols.index(c) < len(values) else '' for c in sel_cols]
-            lines.append('\t'.join(row))
-        self.root.clipboard_clear()
-        self.root.clipboard_append('\n'.join(lines))
+        try:
+            if not self.dv_selected_cols:
+                return
+            cols = list(self.dv['columns'])
+            sel_cols = [c for c in cols if c in self.dv_selected_cols]
+            if not sel_cols:
+                return
+            lines = ['\t'.join(sel_cols)]  # Header
+            for iid in self.dv.get_children():
+                values = self.dv.item(iid, 'values')
+                row = [str(values[cols.index(c)]) if cols.index(c) < len(values) else '' for c in sel_cols]
+                lines.append('\t'.join(row))
+            text = '\n'.join(lines)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.root.update()
+        except Exception as ex:
+            print(f'Copy cols error: {ex}')
 
     def _on_dv_col_toggle(self, e):
         """Ctrl+Click on heading to toggle column selection for copy."""
