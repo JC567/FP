@@ -382,7 +382,7 @@ def _infer_industry_from_name(name):
 def get_industry(code, name=''):
     """获取股票行业信息。
     
-    优先级：本地缓存 -> Sina API -> 东方财富API -> 关键词推断
+    优先级：本地缓存 -> 关键词推断（无网络） -> 远程API（仅兜底）
     
     Args:
         code: 股票代码(6位)
@@ -402,18 +402,17 @@ def get_industry(code, name=''):
     if code in _industry_cache and _industry_cache[code]:
         return _industry_cache[code]
     
-    # 2. 尝试从Sina获取
-    try:
-        sina_map = _fetch_from_sina()
-        if code in sina_map:
-            _industry_cache[code] = sina_map[code]
-            _save_to_db({code: sina_map[code]})
-            return sina_map[code]
-    except Exception:
-        pass
+    # 2. 关键词推断（无网络请求，快速）
+    if name:
+        industry = _infer_industry_from_name(name)
+        if industry:
+            _industry_cache[code] = industry
+            _save_to_db({code: industry})
+            return industry
     
-    # 3. 尝试从东方财富获取
+    # 3. 远程API（仅兜底）
     try:
+        # 东方财富批量API
         em_map = _fetch_from_eastmoney_batch()
         if code in em_map:
             _industry_cache[code] = em_map[code]
@@ -422,19 +421,13 @@ def get_industry(code, name=''):
     except Exception:
         pass
     
-    # 4. 关键词推断
-    if name:
-        industry = _infer_industry_from_name(name)
-        if industry:
-            _industry_cache[code] = industry
-            _save_to_db({code: industry})
-            return industry
-    
     return ''
 
 
 def batch_get_industries(codes_with_names):
     """批量获取行业信息。
+    
+    优化策略：本地缓存 -> 关键词推断（无网络） -> 远程API（仅兜底）
     
     Args:
         codes_with_names: [(code, name), ...] 股票代码和名称列表
@@ -450,7 +443,7 @@ def batch_get_industries(codes_with_names):
     result = {}
     missing = []
     
-    # 先从本地缓存获取
+    # 1. 先从本地缓存获取
     for code, name in codes_with_names:
         code = str(code).zfill(6)
         if code in _industry_cache and _industry_cache[code]:
@@ -461,36 +454,34 @@ def batch_get_industries(codes_with_names):
     if not missing:
         return result
     
-    # 尝试从远程获取缺失的
+    # 2. 关键词推断（无网络请求，快速）
+    still_missing = []
+    for code, name in missing:
+        industry = _infer_industry_from_name(name)
+        if industry:
+            result[code] = industry
+            _industry_cache[code] = industry
+        else:
+            still_missing.append((code, name))
+    
+    if not still_missing:
+        # 保存推断结果到数据库
+        _save_to_db({c: result[c] for c in result})
+        return result
+    
+    # 3. 远程API（仅兜底，且仅对无法推断的少量股票）
     try:
-        # Sina
-        sina_map = _fetch_from_sina()
-        for code, name in missing:
-            if code in sina_map:
-                result[code] = sina_map[code]
-                _industry_cache[code] = sina_map[code]
-        
-        # 东方财富（如果Sina没找到）
-        still_missing = [(c, n) for c, n in missing if c not in result]
-        if still_missing:
-            em_map = _fetch_from_eastmoney_batch()
-            for code, name in still_missing:
-                if code in em_map:
-                    result[code] = em_map[code]
-                    _industry_cache[code] = em_map[code]
-        
-        # 关键词推断（兜底）
-        still_missing2 = [(c, n) for c, n in missing if c not in result]
-        for code, name in still_missing2:
-            industry = _infer_industry_from_name(name)
-            if industry:
-                result[code] = industry
-                _industry_cache[code] = industry
-        
-        # 保存到数据库
-        _save_to_db({c: result[c] for c in result if c in [m[0] for m in missing]})
+        # 东方财富批量API（比Sina快）
+        em_map = _fetch_from_eastmoney_batch()
+        for code, name in still_missing:
+            if code in em_map:
+                result[code] = em_map[code]
+                _industry_cache[code] = em_map[code]
     except Exception:
         pass
+    
+    # 保存到数据库
+    _save_to_db({c: result[c] for c in result if c in [m[0] for m in missing]})
     
     return result
 

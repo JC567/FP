@@ -382,17 +382,20 @@ class TaskApp:
                     df['行业'] = df['代码'].astype(str).str.zfill(6).map(lambda c: ind_map.get(c, ''))
             except Exception:
                 pass
-        # If industry column is still empty or missing, try to fill missing values
+        # If industry column is still empty or missing, try to fill missing values (batch)
         if '行业' in df.columns and '代码' in df.columns:
             try:
-                from valresearch.data.industry_cache import get_industry
-                for idx, row in df.iterrows():
-                    if pd.isna(row['行业']) or str(row['行业']).strip() == '':
+                from valresearch.data.industry_cache import batch_get_industries
+                missing_mask = df['行业'].isna() | (df['行业'].astype(str).str.strip() == '')
+                if missing_mask.any():
+                    missing_rows = df[missing_mask]
+                    codes = missing_rows['代码'].astype(str).str.zfill(6).tolist()
+                    names = missing_rows['名称'].tolist() if '名称' in missing_rows.columns else [''] * len(codes)
+                    ind_map = batch_get_industries(list(zip(codes, names)))
+                    for idx, row in missing_rows.iterrows():
                         code = str(row['代码']).zfill(6)
-                        name = str(row.get('名称', ''))
-                        industry = get_industry(code, name)
-                        if industry:
-                            df.at[idx, '行业'] = industry
+                        if code in ind_map:
+                            df.at[idx, '行业'] = ind_map[code]
             except Exception:
                 pass
         if '行业' in df.columns and '名称' in df.columns:
@@ -1218,17 +1221,21 @@ class TaskApp:
                 r['名称'] = names.get(r['代码'], '')
 
     def _fill_industries(self, rows):
-        """从本地缓存或远程API补全行业。"""
+        """从本地缓存或远程API补全行业（批量获取，减少网络请求）。"""
         try:
-            from valresearch.data.industry_cache import get_industry
+            from valresearch.data.industry_cache import batch_get_industries
             
-            for r in rows:
-                if not r.get('行业'):
-                    code = r['代码']
-                    name = r.get('名称', '')
-                    industry = get_industry(code, name)
-                    if industry:
-                        r['行业'] = industry
+            missing = [r for r in rows if not r.get('行业')]
+            if not missing:
+                return
+            
+            codes_names = [(r['代码'], r.get('名称', '')) for r in missing]
+            ind_map = batch_get_industries(codes_names)
+            
+            for r in missing:
+                industry = ind_map.get(r['代码'], '')
+                if industry:
+                    r['行业'] = industry
         except Exception:
             pass
 
