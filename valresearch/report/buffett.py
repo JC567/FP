@@ -269,3 +269,85 @@ def format_buffett_report(rep) -> str:
     L.append('风险提示：便宜≠一定上涨；高股息≠一定安全；历史低估≠未来不跌。')
     L.append('本报告仅供研究参考，不构成投资建议。')
     return '\n'.join(L)
+
+
+def bank_value_assess_from_rep(rep) -> dict:
+    """从Report对象调用银行价值投资模型，返回适配字典。"""
+    from valresearch.fundamental.bank_value_model import (
+        bank_value_assess as _bva, check_industry as _chk,
+        UNSUPPORTED_INDUSTRY, DATA_INSUFFICIENT,
+        STRONG_BUY, ACCUMULATE, HOLD_WAIT,
+    )
+    industry_type = getattr(rep, 'industry_type', '') or ''
+    symbol = getattr(rep, 'symbol', '')
+    name = getattr(rep, 'name', '') or symbol
+    asof_date = getattr(rep, 'analysis_date', '') or ''
+    
+    if not _chk(industry_type):
+        return {
+            'supported': False, 'suitable': None,
+            'reasons': [], 'fails': [f'行业={industry_type or "未知"}，银行价值投资模型仅支持银行业'],
+            'status': UNSUPPORTED_INDUSTRY, 'method': None,
+        }
+    
+    fun = rep.fundamental or {}
+    detail = fun.get('detail', {}) or {}
+    bank = detail.get('banking', {}) or {}
+    earn = detail.get('earnings', {}) or {}
+    divd = detail.get('dividend', {}) or {}
+    val = rep.valuation or {}
+    
+    # 构建fin字典
+    roe_raw = _g(bank, 'roe')
+    fin = {
+        'price': _g(val, 'price'),
+        'pb': _g(val, 'pb'),
+        'pe_ttm': _g(val, 'pe_ttm'),
+        'dividend_yield': _g(val, 'dividend_yield'),
+        'pe_pct': _g(val, 'pe_pct_10y'),
+        'dy_pct': _g(val, 'dividend_yield_pct'),
+        'bvps': _g(val, 'bvps'),
+        'net_profit': _g(earn, 'net_profit'),
+        'equity': _g(bank, 'equity'),
+        'npl_ratio': _g(bank, 'npl_ratio'),
+        'provision_coverage': _g(bank, 'provision_coverage'),
+        'concern_loan_ratio': _g(bank, 'concern_loan_ratio'),
+        'credit_cost': _g(bank, 'credit_cost'),
+        'cet1': _g(bank, 'cet1'),
+        'tier1': _g(bank, 'tier1'),
+        'car': _g(bank, 'car'),
+        'npl_history': _g(bank, 'npl_history'),
+        'equity_ratio': _g(bank, 'equity_ratio'),
+    }
+    
+    # 分红数据
+    div_consec = _g(divd, 'consecutive_years')
+    payout_ratios = _g(divd, 'payout_ratios')
+    div_obj = type('Div', (), {
+        'consecutive_years': div_consec,
+        'payout_ratios': payout_ratios or [],
+    })() if div_consec is not None else None
+    
+    # 历史净利润
+    profits = _g(earn, 'profits') or []
+    
+    res = _bva(symbol, name, industry_type, fin, div_obj, profits, asof_date)
+    
+    return {
+        'supported': True,
+        'suitable': res.status in (STRONG_BUY, ACCUMULATE),
+        'status': res.status,
+        'reasons': res.signal_reasons,
+        'fails': res.fail_reasons,
+        'method': 'PB绝对估值+历史估值分位',
+        'strong': res.status == STRONG_BUY,
+        'cheap_tier': 'strong' if res.status == STRONG_BUY else ('accumulate' if res.status == ACCUMULATE else None),
+        'quality_pass': res.quality.quality_pass,
+        'roe': res.quality.roe,
+        'pb': res.valuation.pb,
+        'pb_fair': res.valuation.pb_fair,
+        'pe_pct': res.valuation.pe_pct_10y,
+        'dy_pct': res.valuation.dy_pct_10y,
+        'monthly_multiplier': res.monthly_multiplier,
+        'result': res,
+    }

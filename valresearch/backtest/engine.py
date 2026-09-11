@@ -19,6 +19,14 @@ from valresearch.data.providers import (DataProvider, FinancialDataProvider,
                                         IndustryDataProvider)
 from valresearch.valuation import engine, percentile as pct
 from valresearch.backtest.metrics import metrics as perf_metrics, win_rate
+from valresearch.fundamental.bank_value_model import (
+    PB_CHEAP as _BANK_VALUE_PB_CHEAP,
+    PB_STRONG as _BANK_VALUE_PB_STRONG,
+    PE_PCT_ACCUM as _BANK_VALUE_PE_PCT_ACCUM,
+    DY_PCT_ACCUM as _BANK_VALUE_DY_PCT_ACCUM,
+    PE_PCT_STRONG as _BANK_VALUE_PE_PCT_STRONG,
+    DY_PCT_STRONG as _BANK_VALUE_DY_PCT_STRONG,
+)
 
 gg = importlib.import_module('valresearch.valuation.gordon')
 qs = importlib.import_module('valresearch.fundamental.quality_score')
@@ -79,7 +87,7 @@ def _equity_with_cost(rets, weights, unit_cost):
 
 _BUY_SET = {'BUY', 'STRONG_BUY', 'ACCUMULATE'}
 
-# 巴菲特模式触发阈值（仅银行业，能力圈限定）：行业专用质量 + PB破净/历史分位便宜 + 非陷阱
+# 银行价值投资模型触发阈值（银行业专用）
 _BUFFETT_QUALITY_MIN = 60.0     # 通用质量分(0-100)下限（银行业=0.85*银行质量+0.15*行业），仅作兜底
 _BUFFETT_VTSCORE_MAX = 50.0     # 价值陷阱分上限，越低越不是陷阱
 _BUFFETT_BANK_ROE_MIN = 10.0    # 银行 ROE(%) 下限（简单口径=归母净利/归母权益）
@@ -89,7 +97,7 @@ _BUFFETT_BANK_PB_CHEAP = 1.0    # 银行 PB ≤ 1.0（破净）视为便宜
 _BUFFETT_PE_PCT_MAX = 30.0      # 无 PB 时：历史 PE 分位 ≤ 30% 视为"低估"
 _BUFFETT_DY_PCT_MIN = 70.0      # 无 PB 时：历史股息率分位 ≥ 70% 视为"高股息"
 _BUFFETT_SUPPORTED = ('银行',)  # 仅支持银行业
-_BUFFETT_STRONG_MULT = 2.0     # 强买档每月额度 = 常规档(年度/12) × 此倍数（与 buffett._BUFFETT_STRONG_MULT 一致）
+_BUFFETT_STRONG_MULT = 2.0     # 强买档每月额度 = 常规档(年度/12) × 此倍数
 
 
 def simulate_capital_modes(px_price, dates, reb_dates, reb_signal, reb_pe, reb_dy,

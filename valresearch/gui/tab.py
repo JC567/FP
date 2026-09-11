@@ -31,7 +31,7 @@ MUTED = '#6b7280'
 MODE_CN2KEY = {'稳健型 (保守)': 'conservative',
                '均衡型 (默认)': 'balanced',
                '进取型 (激进)': 'aggressive',
-               '巴菲特模式': 'buffett'}
+               '银行价值投资模型': 'buffett'}
 
 HELP_GLOSSARY = (
     '【新手必读 · 术语速查】看不懂报告？先看这一页\n'
@@ -123,7 +123,7 @@ HELP_MODE = (
     '   · 适合：风险承受力强、想抓住更多机会的投资者。\n'
     '   · 代价：买贵一点的可能性更大，需要扛得住回撤。\n'
     '\n'
-    '■ 巴菲特模式（buffett）——"能力圈限定"的银行业专用评估（当前仅支持银行业）\n'
+    '■ 银行价值投资模型（buffett）——"能力圈限定"的银行业专用评估（当前仅支持银行业）\n'
     '   · 核心前提：巴菲特以"行业(能力圈)"为前提——先有行业，才有具体分析模型/策略；不做跨行业通用策略。\n'
     '     因此本模式只实现银行业评估，输入其它行业时单股分析与单股回测均直接显示"暂未支持该行业"。\n'
     '   · 银行业专用判定（与通用质量+Gordon 彻底分离）：\n'
@@ -135,10 +135,10 @@ HELP_MODE = (
     '      · 强烈买入区：每月额度上调至常规档×2（仍分批、不一次性），深度低估更快建仓；\n'
     '      · 累积区：按月定额分批（每月额度=常规档），不一次性追高；\n'
     '      · 两者差异仅在"每月额度大小"，均"分批、不一次性、只买不卖"。不适合只说明原因、不给买入建议。\n'
-    '   · 与前面三种模式的区别：前三种为通用"历史估值分位"宽松度买卖；巴菲特模式是行业专用(银行业)的\n'
+     '   · 与前面三种模式的区别：前三种为通用"历史估值分位"宽松度买卖；银行价值投资模型是行业专用(银行业)的\n'
     '     质量+安全边际口径，且限定行业——这正是"能力圈"的体现。\n'
     '\n'
-    '一句话总结：稳健=耐心等好价，进取=积极抓机会，均衡=两头兼顾，巴菲特=优质+便宜(留安全边际)才出手。\n'
+     '一句话总结：稳健=耐心等好价，进取=积极抓机会，均衡=两头兼顾，银行价值=优质+便宜(留安全边际)才出手。\n'
     '\n'
     '选择方式：页面上方「模式」下拉框切换，或点「模式说明」查看本说明。'
 )
@@ -249,7 +249,7 @@ HELP_BACKTEST = (
     '   · 智能定投：在每月定投基础上，按估值分位动态调节当月金额——\n'
     '     便宜多买、贵了少买。规则：cheap = 股息率分位 − PE分位（百分点差），\n'
     '     当月倍数 = 限制到[0.5, 2.0]的 (1 + cheap)；即 PE越低/股息率越高(越便宜)买得越多，反之越少。\n'
-    '   · 巴菲特模式（仅银行业，能力圈限定）：仅在"银行业专用质量门槛(ROE≥10% 且 权益比率≥6% 且 连续分红≥5年\n'
+     '   · 银行价值投资模型（仅银行业，能力圈限定）：仅在"银行业专用质量门槛(ROE≥10% 且 权益比率≥6% 且 连续分红≥5年\n'
     '     且 盈利未显著恶化 且 非价值陷阱) + 便宜(有 PB 时 PB≤1.0 破净；无 PB 时 PE分位≤30% 或 股息率分位≥70%)"\n'
     '     同时成立时才建仓；达标后按"每月额度"低估区分批买入（连续低估就逐月买），且永不卖出(持有 forever)。\n'
     '     买点分两档（均每月最多一次、不一次性）：强烈买入区(深度破净PB≤0.80 或 PE分位≤15% 或 股息率分位≥85%)\n'
@@ -495,8 +495,58 @@ class VRTab:
             cfg = get_config(mode)
             rep = analyze(code, date, mode, name, cfg, progress_cb=self._prog_cb())
             if mode == 'buffett':
-                from valresearch.report.buffett import format_buffett_report
-                txt = format_buffett_report(rep)
+                from valresearch.report.buffett import format_bank_value_report
+                from valresearch.fundamental.bank_value_model import (
+                    bank_value_assess as _bva, check_industry as _chk,
+                    UNSUPPORTED_INDUSTRY, DATA_INSUFFICIENT,
+                    STRONG_BUY, ACCUMULATE, HOLD_WAIT,
+                )
+                industry_type = getattr(rep, 'industry_type', '') or ''
+                symbol = getattr(rep, 'symbol', '')
+                name_val = getattr(rep, 'name', '') or symbol
+                asof_date = getattr(rep, 'analysis_date', '') or ''
+                
+                if _chk(industry_type):
+                    fun = rep.fundamental or {}
+                    detail = fun.get('detail', {}) or {}
+                    bank = detail.get('banking', {}) or {}
+                    earn = detail.get('earnings', {}) or {}
+                    divd = detail.get('dividend', {}) or {}
+                    val = rep.valuation or {}
+                    
+                    fin = {
+                        'price': val.get('price'),
+                        'pb': val.get('pb'),
+                        'pe_ttm': val.get('pe_ttm'),
+                        'dividend_yield': val.get('dividend_yield'),
+                        'pe_pct': val.get('pe_pct_10y'),
+                        'dy_pct': val.get('dividend_yield_pct'),
+                        'bvps': val.get('bvps'),
+                        'net_profit': earn.get('net_profit'),
+                        'equity': bank.get('equity'),
+                        'npl_ratio': bank.get('npl_ratio'),
+                        'provision_coverage': bank.get('provision_coverage'),
+                        'concern_loan_ratio': bank.get('concern_loan_ratio'),
+                        'credit_cost': bank.get('credit_cost'),
+                        'cet1': bank.get('cet1'),
+                        'tier1': bank.get('tier1'),
+                        'car': bank.get('car'),
+                        'npl_history': bank.get('npl_history'),
+                    }
+                    
+                    div_consec = divd.get('consecutive_years')
+                    payout_ratios = divd.get('payout_ratios')
+                    div_obj = type('Div', (), {
+                        'consecutive_years': div_consec,
+                        'payout_ratios': payout_ratios or [],
+                    })() if div_consec is not None else None
+                    
+                    profits = earn.get('profits') or []
+                    
+                    result = _bva(symbol, name_val, industry_type, fin, div_obj, profits, asof_date)
+                    txt = format_bank_value_report(result)
+                else:
+                    txt = f'行业={industry_type or "未知"}，银行价值投资模型仅支持银行业'
             else:
                 txt = format_report(rep)
             self.q.put(('report', txt))
@@ -520,8 +570,8 @@ class VRTab:
             cfg = get_config(mode)
             rep = analyze(code, date, mode, name, cfg, progress_cb=self._prog_cb())
             if mode == 'buffett':
-                from valresearch.report.buffett import buffett_assess
-                rep.signal['buffett'] = buffett_assess(rep)
+                from valresearch.report.buffett import bank_value_assess_from_rep
+                rep.signal['bank_value'] = bank_value_assess_from_rep(rep)
             import os
             outdir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                   'data', 'vr_reports')
@@ -553,13 +603,13 @@ class VRTab:
             res = run_backtest(code, '2019-01-01', None, mode, cfg,
                                progress_cb=self._prog_cb(),
                                allow_sell=allow_sell, dividend_reinvest=dividend_reinvest)
-            # 巴菲特模式仅支持银行业（能力圈）：非银行业直接提示"暂未支持该行业"，不画图
+            # 银行价值投资模型仅支持银行业（能力圈）：非银行业直接提示"暂未支持该行业"，不画图
             if mode == 'buffett' and not res.get('buffett_supported', True):
                 self.q.put(('report',
-                    '【巴菲特模式】暂未支持该行业（当前仅支持银行业）\n'
+                    '【银行价值投资模型】暂未支持该行业（当前仅支持银行业）\n'
                     f'  标的 {res.get("symbol")} 行业={res.get("industry_type", "未知")}；\n'
-                    '  巴菲特模式以"能力圈(行业)"为前提，不做跨行业通用策略，故直接不支持。\n'
-                    '  如需查看其它模式曲线，请切换到 稳健/进取/均衡 型；新增行业的巴菲特式评估需另起该行业专用模型。\n'))
+                    '  银行价值投资模型以"能力圈(行业)"为前提，不做跨行业通用策略，故直接不支持。\n'
+                    '  如需查看其它模式曲线，请切换到 稳健/进取/均衡 型；新增行业的银行价值式评估需另起该行业专用模型。\n'))
                 self._set_busy(False, '完成')
                 return
             self.q.put(('report', self._bt_summary(res)))
@@ -606,7 +656,7 @@ class VRTab:
             budget = res.get('budget', 500000)
             A(f'【资本预算建仓模式（每年 %.0f 元）】' % budget)
             for label, key in (('每月定投', 'monthly'), ('策略买点', 'strategy'),
-                                ('智能定投', 'smart'), ('巴菲特模式', 'buffett')):
+                                ('智能定投', 'smart'), ('银行价值投资模型', 'buffett')):
                 m = modes.get(key)
                 if m:
                     A('  · %s：期末资产=%s ｜ 累计投入=%s ｜ 总收益率=%s ｜ 最大回撤=%s'
@@ -686,7 +736,7 @@ class VRTab:
         nb = ttk.Notebook(win)
         nb.pack(fill='both', expand=True, padx=8, pady=8)
         labels = (('每月定投', 'monthly'), ('策略买点', 'strategy'),
-                  ('智能定投', 'smart'), ('巴菲特模式', 'buffett'))
+                  ('智能定投', 'smart'), ('银行价值投资模型', 'buffett'))
         for cn_label, key in labels:
             tl = trades.get(key)
             if not tl:
