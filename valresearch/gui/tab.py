@@ -495,9 +495,9 @@ class VRTab:
             cfg = get_config(mode)
             rep = analyze(code, date, mode, name, cfg, progress_cb=self._prog_cb())
             if mode == 'buffett':
-                from valresearch.report.buffett import format_bank_value_report
                 from valresearch.fundamental.bank_value_model import (
                     bank_value_assess as _bva, check_industry as _chk,
+                    format_bank_value_report,
                     UNSUPPORTED_INDUSTRY, DATA_INSUFFICIENT,
                     STRONG_BUY, ACCUMULATE, HOLD_WAIT,
                 )
